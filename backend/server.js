@@ -44,11 +44,24 @@ app.use((req, res, next) => {
   next();
 });
 
-// Connect to PostgreSQL
-connectDB().catch((error) => {
-  console.error('Failed to connect to database:', error);
-  process.exit(1);
-});
+// Connect to PostgreSQL (Middleware for Serverless)
+// This ensures that for every request (especially after a cold start on Vercel),
+// the database connection is established before we try to use it.
+const ensureDatabaseConnection = async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    console.error('Failed to connect to database in middleware:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Database connection failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+app.use(ensureDatabaseConnection);
 
 // Security middleware
 app.use(helmet({
