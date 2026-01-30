@@ -1,0 +1,18 @@
+Results:
+Online submit with a fresh QR token → FINAL.
+Repeat submit with the same token → REJECTED (one‑time QR enforced).
+Offline submit with a fresh QR token → FINAL (same validator, no bypass).
+Offline submit after a same‑day online check‑in → REJECTED as duplicate (expected).
+
+QR Ticket contains: [Your ID] + [Office WiFi name] + [Expire: 10:05AM] + [Secret Math Lock]
+
+Browser checks:
+✅ Math lock valid? → YES
+✅ On office WiFi? → YES  
+✅ Your usual device? → YES
+✅ Not expired? → YES
+→ "Attendance Marked!"
+
+❌ Home WiFi? → BLOCKED
+❌ Friend's phone? → BLOCKED  
+❌ Shared screenshot? → EXPIRED

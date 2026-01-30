@@ -1,0 +1,1296 @@
+import express from 'express';
+import { body, validationResult } from 'express-validator';
+import { eq, and, gte, lte, desc, asc, sql, isNotNull } from 'drizzle-orm';
+import moment from 'moment';
+import { getDB } from '../config/db.js';
+import { attendance, users, leaves, qrCodes, offices, qrValidationLogs } from '../db/schema.js';
+import { authenticate, authorize } from '../middleware/authMiddleware.js';
+import { checkIn, checkOut, exportMonthlyExcel } from '../controllers/attendanceController.js';
+import { getClientIp, isIpInRanges } from '../utils/ipUtils.js';
+import { verifyQrToken, hashList } from '../utils/qrJwt.js';
+
+const router = express.Router();
+
+// @route   POST /api/attendance/checkin
+// @desc    Check in for attendance
+// @access  Private
+router.post('/checkin', authenticate, [
+  body('location').optional().trim(),
+  body('notes').optional().trim()
+], checkIn);
+
+// @route   POST /api/attendance/checkout
+// @desc    Check out for attendance
+// @access  Private
+router.post('/checkout', authenticate, [
+  body('location').optional().trim(),
+  body('notes').optional().trim()
+], checkOut);
+
+// @route   POST /api/attendance/validate
+// @desc    Deprecated: use /attendance/submit
+// @access  Private
+
+// @route   POST /api/attendance/sync
+// @desc    Deprecated: use /attendance/submit
+// @access  Private
+
+const handleAttendanceSubmit = async (req, res) => {
+  try {
+    const db = getDB();
+    const userId = req.user.id;
+    const ipAddress = getClientIp(req);
+    const userAgent = req.get('User-Agent') || '';
+
+    const records = Array.isArray(req.body?.records) ? req.body.records : [req.body];
+    const normalizedRecords = records
+      .filter((record) => record && typeof record === 'object')
+      .map((record) => ({
+        id: record.id,
+        token: record.token,
+        scannedAt: record.scannedAt,
+        networkState: record.networkState || 'ONLINE',
+        networkType: record.networkType || 'unknown',
+        ssid: record.ssid || null
+      }))
+      .filter((record) => record.token && record.scannedAt);
+
+    if (!normalizedRecords.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid submission records provided'
+      });
+    }
+
+    normalizedRecords.sort((a, b) => new Date(a.scannedAt) - new Date(b.scannedAt));
+
+    const results = [];
+
+    const logSubmission = async ({ qrId, officeId, isValid, failureReason, validationResult, suspiciousFlags = [] }) => {
+      await db.insert(qrValidationLogs).values({
+        qrId,
+        userId,
+        officeId,
+        isValid,
+        validationResult,
+        gpsLat: null,
+        gpsLng: null,
+        gpsAccuracy: null,
+        ipAddress,
+        userAgent,
+        failureReason: isValid ? null : failureReason,
+        isSuspicious: !isValid,
+        suspiciousFlags: isValid ? [] : suspiciousFlags
+      });
+    };
+
+    for (const record of normalizedRecords) {
+      let tokenPayload;
+      try {
+        tokenPayload = verifyQrToken(record.token);
+      } catch (error) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Invalid or expired QR token'
+        });
+        await logSubmission({
+          qrId: null,
+          officeId: null,
+          isValid: false,
+          failureReason: 'Invalid or expired QR token',
+          validationResult: {
+            mode: 'offline',
+            syncStatus: 'rejected',
+            scannedAt: record.scannedAt,
+            networkType: record.networkType,
+            ssid: record.ssid,
+            ipAddress,
+            networkState: record.networkState
+          },
+          suspiciousFlags: ['INVALID_TOKEN']
+        });
+        continue;
+      }
+
+      const { qrId, officeId, allowedSSIDHash, allowedIPRangeHash, exp } = tokenPayload;
+      const scannedAtDate = new Date(record.scannedAt);
+      const scannedAtTime = scannedAtDate.getTime();
+      const baseValidation = {
+        mode: record.networkState === 'OFFLINE' ? 'offline' : 'online',
+        scannedAt: record.scannedAt,
+        networkType: record.networkType,
+        ssid: record.ssid,
+        ipAddress,
+        networkState: record.networkState
+      };
+
+      if (Number.isNaN(scannedAtTime)) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Invalid scannedAt timestamp'
+        });
+        await logSubmission({
+          qrId,
+          officeId,
+          isValid: false,
+          failureReason: 'Invalid scannedAt timestamp',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['INVALID_SCANNED_AT']
+        });
+        continue;
+      }
+
+      if (scannedAtTime > Date.now()) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Scan time is in the future'
+        });
+        await logSubmission({
+          qrId,
+          officeId,
+          isValid: false,
+          failureReason: 'Scan time is in the future',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['FUTURE_SCAN_TIME']
+        });
+        continue;
+      }
+
+      if (exp && scannedAtTime > exp * 1000) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'QR token expired at scan time'
+        });
+        await logSubmission({
+          qrId,
+          officeId,
+          isValid: false,
+          failureReason: 'QR token expired at scan time',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['TOKEN_EXPIRED_AT_SCAN']
+        });
+        continue;
+      }
+
+      const [qrRecord] = await db
+        .select({
+          qr: qrCodes,
+          office: offices
+        })
+        .from(qrCodes)
+        .leftJoin(offices, eq(qrCodes.officeId, offices.id))
+        .where(eq(qrCodes.qrId, qrId))
+        .limit(1);
+
+      const qrCode = qrRecord?.qr || null;
+      const office = qrRecord?.office || null;
+
+      if (!qrCode || !office) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'QR code not found'
+        });
+        await logSubmission({
+          qrId,
+          officeId,
+          isValid: false,
+          failureReason: 'QR code not found',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['QR_NOT_FOUND']
+        });
+        continue;
+      }
+
+      if (String(office.id) !== String(officeId)) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'QR token office mismatch'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'QR token office mismatch',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['OFFICE_MISMATCH']
+        });
+        continue;
+      }
+
+      if (qrCode.isUsed) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'QR code already used'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'QR code already used',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['QR_REPLAY']
+        });
+        continue;
+      }
+
+      const officeAllowedSSIDHash = hashList(office.allowedSSIDs || []);
+      const officeAllowedIPRangeHash = hashList(office.allowedIPRanges || []);
+      if (officeAllowedSSIDHash !== allowedSSIDHash || officeAllowedIPRangeHash !== allowedIPRangeHash) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'QR token no longer matches office network policy'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'QR token no longer matches office network policy',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['POLICY_MISMATCH']
+        });
+        continue;
+      }
+
+      if (String(record.networkType).toLowerCase().includes('cellular') ||
+        ['2g', '3g', '4g', '5g', 'slow-2g'].includes(String(record.networkType).toLowerCase())) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Cellular network detected'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'Cellular network detected',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['CELLULAR_NETWORK']
+        });
+        continue;
+      }
+
+      const allowedRanges = office.allowedIPRanges || [];
+      if (!allowedRanges.length) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Office network is not configured (allowed IP ranges missing)'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'Office network is not configured (allowed IP ranges missing)',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['IP_POLICY_MISSING']
+        });
+        continue;
+      }
+
+      if (!isIpInRanges(ipAddress, allowedRanges)) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Not on corporate network'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'Not on corporate network',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['IP_MISMATCH']
+        });
+        continue;
+      }
+
+      const allowedSSIDs = office.allowedSSIDs || [];
+      if (record.ssid && allowedSSIDs.length && !allowedSSIDs.includes(record.ssid)) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Wi-Fi SSID mismatch'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'Wi-Fi SSID mismatch',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['SSID_MISMATCH']
+        });
+        continue;
+      }
+
+      const today = moment().startOf('day').toDate();
+      const todayEnd = moment(today).endOf('day').toDate();
+
+      const [existingAttendance] = await db
+        .select()
+        .from(attendance)
+        .where(
+          and(
+            eq(attendance.employeeId, userId),
+            gte(attendance.date, today),
+            sql`${attendance.date} <= ${todayEnd}`,
+            sql`${attendance.checkInTime} IS NOT NULL`
+          )
+        )
+        .limit(1);
+
+      if (existingAttendance) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Duplicate offline entry'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'Duplicate offline entry',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['DUPLICATE_ENTRY']
+        });
+        continue;
+      }
+
+      const [activeLeave] = await db
+        .select()
+        .from(leaves)
+        .where(
+          and(
+            eq(leaves.employeeId, userId),
+            eq(leaves.status, 'approved'),
+            sql`${leaves.startDate} <= ${todayEnd}`,
+            sql`${leaves.endDate} >= ${today}`
+          )
+        )
+        .limit(1);
+
+      if (activeLeave) {
+        results.push({
+          id: record.id,
+          token: record.token,
+          status: 'REJECTED',
+          reason: 'Employee is on approved leave'
+        });
+        await logSubmission({
+          qrId,
+          officeId: office.id,
+          isValid: false,
+          failureReason: 'Employee is on approved leave',
+          validationResult: {
+            ...baseValidation,
+            syncStatus: 'rejected'
+          },
+          suspiciousFlags: ['ON_LEAVE']
+        });
+        continue;
+      }
+
+      await db
+        .update(qrCodes)
+        .set({
+          isUsed: true,
+          usedAt: new Date(),
+          usedBy: userId
+        })
+        .where(eq(qrCodes.qrId, qrId));
+
+      await db
+        .insert(attendance)
+        .values({
+          employeeId: userId,
+          date: today,
+          checkInTime: scannedAtDate,
+          checkInLocation: `QR: ${office.name}`,
+          checkInIpAddress: ipAddress,
+          checkInDeviceInfo: userAgent,
+          status: 'present'
+        });
+
+      results.push({
+        id: record.id,
+        token: record.token,
+        status: 'FINAL',
+        reason: 'Accepted'
+      });
+
+      await logSubmission({
+        qrId,
+        officeId: office.id,
+        isValid: true,
+        failureReason: null,
+        validationResult: {
+          ...baseValidation,
+          syncStatus: 'final'
+        },
+        suspiciousFlags: []
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        results
+      }
+    });
+  } catch (error) {
+    console.error('Attendance submit error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during attendance submit'
+    });
+  }
+};
+
+// @route   POST /api/attendance/submit
+// @desc    Unified attendance submission (online/offline)
+// @access  Private
+router.post('/submit', authenticate, handleAttendanceSubmit);
+
+// Backward compatibility (deprecated)
+router.post('/validate', authenticate, handleAttendanceSubmit);
+router.post('/sync', authenticate, handleAttendanceSubmit);
+
+// @route   GET /api/attendance
+// @desc    Get attendance records
+// @access  Private (Admin/HR can see all, employees see only their own)
+router.get('/', authenticate, async (req, res) => {
+  try {
+    const db = getDB();
+    const { page = 1, limit = 10, employeeId, startDate, endDate, status } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let conditions = [];
+
+    // If not admin or HR, only show own records
+    if (req.user.role === 'employee') {
+      conditions.push(eq(attendance.employeeId, req.user.id));
+    } else if (employeeId) {
+      conditions.push(eq(attendance.employeeId, employeeId));
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      if (startDate) {
+        conditions.push(gte(attendance.date, moment(startDate).startOf('day').toDate()));
+      }
+      if (endDate) {
+        conditions.push(lte(attendance.date, moment(endDate).endOf('day').toDate()));
+      }
+    }
+
+    // Status filter
+    if (status) {
+      conditions.push(eq(attendance.status, status));
+    }
+
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Get total count
+    const totalResult = await db
+      .select({ count: sql`count(*)` })
+      .from(attendance)
+      .where(whereClause);
+    const total = Number(totalResult[0]?.count || 0);
+
+    // Get attendance records with employee details
+    const attendanceRecords = await db
+      .select({
+        attendance: attendance,
+        employee: {
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          employeeId: users.employeeId,
+          department: users.department,
+          position: users.position,
+        }
+      })
+      .from(attendance)
+      .leftJoin(users, eq(attendance.employeeId, users.id))
+      .where(whereClause)
+      .orderBy(desc(attendance.date))
+      .limit(parseInt(limit))
+      .offset(offset);
+
+    // Format response
+    const formattedData = attendanceRecords.map(record => ({
+      ...record.attendance,
+      employee: record.employee
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        docs: formattedData,
+        totalDocs: total,
+        limit: parseInt(limit),
+        page: parseInt(page),
+        totalPages: Math.ceil(total / parseInt(limit)),
+        hasNextPage: offset + parseInt(limit) < total,
+        hasPrevPage: parseInt(page) > 1,
+      }
+    });
+  } catch (error) {
+    console.error('Attendance fetch error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching attendance'
+    });
+  }
+});
+
+// @route   GET /api/attendance/today
+// @desc    Get today's attendance records
+// @access  Private (Admin/HR can see all, employees see only their own)
+router.get('/today', authenticate, async (req, res) => {
+  try {
+    const db = getDB();
+    const today = moment().startOf('day').toDate();
+    const todayEnd = moment(today).endOf('day').toDate();
+
+    let conditions = [
+      gte(attendance.date, today),
+      lte(attendance.date, todayEnd)
+    ];
+
+    // If employee, return full record for their dashboard
+    if (req.user.role === 'employee') {
+      conditions.push(eq(attendance.employeeId, req.user.id));
+
+      const [record] = await db
+        .select()
+        .from(attendance)
+        .where(and(...conditions))
+        .limit(1);
+
+      if (record) {
+        return res.json({
+          success: true,
+          data: {
+            id: record.id,
+            checkIn: record.checkInTime ? new Date(record.checkInTime).toISOString() : null,
+            checkOut: record.checkOutTime ? new Date(record.checkOutTime).toISOString() : null,
+            status: record.status || (record.checkInTime ? 'present' : 'absent'),
+            workingHours: record.workingHours || 0,
+            overtime: record.overtime || 0,
+            date: moment(record.date).format('YYYY-MM-DD')
+          }
+        });
+      } else {
+        return res.json({
+          success: true,
+          data: {
+            checkIn: null,
+            checkOut: null,
+            status: 'absent',
+            workingHours: 0,
+            overtime: 0,
+            date: moment(today).format('YYYY-MM-DD')
+          }
+        });
+      }
+    }
+
+    // Admin/HR see all records
+    const attendanceRecords = await db
+      .select({
+        attendance: attendance,
+        employee: {
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          employeeId: users.employeeId,
+          department: users.department,
+          position: users.position,
+        }
+      })
+      .from(attendance)
+      .leftJoin(users, eq(attendance.employeeId, users.id))
+      .where(and(...conditions))
+      .orderBy(asc(attendance.checkInTime));
+
+    // Format response
+    const data = attendanceRecords.map(r => ({
+      id: r.attendance.id,
+      employeeId: r.attendance.employeeId,
+      employeeName: r.employee?.name || 'Unknown',
+      employee: r.employee,
+      checkIn: r.attendance.checkInTime ? new Date(r.attendance.checkInTime).toLocaleTimeString() : null,
+      checkInTime: r.attendance.checkInTime ? new Date(r.attendance.checkInTime) : null,
+      checkOut: r.attendance.checkOutTime ? new Date(r.attendance.checkOutTime).toLocaleTimeString() : null,
+      status: r.attendance.status ? r.attendance.status.charAt(0).toUpperCase() + r.attendance.status.slice(1) : (r.attendance.checkInTime ? 'Present' : 'Absent'),
+      date: moment(r.attendance.date).format('YYYY-MM-DD')
+    }));
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Today attendance fetch error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching today\'s attendance'
+    });
+  }
+});
+
+// @route   GET /api/attendance/employee/:id
+// @desc    Get specific employee's attendance
+// @access  Private
+router.get('/employee/:id', authenticate, async (req, res) => {
+  try {
+    const db = getDB();
+    const { id } = req.params;
+    const { page = 1, limit = 10, startDate, endDate } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Check if user can access this employee's data
+    if (req.user.role === 'employee' && req.user.id !== id) {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied'
+      });
+    }
+
+    let conditions = [eq(attendance.employeeId, id)];
+
+    if (startDate || endDate) {
+      if (startDate) {
+        conditions.push(gte(attendance.date, moment(startDate).startOf('day').toDate()));
+      }
+      if (endDate) {
+        conditions.push(lte(attendance.date, moment(endDate).endOf('day').toDate()));
+      }
+    }
+
+    const whereClause = and(...conditions);
+
+    // Get total count
+    const totalResult = await db
+      .select({ count: sql`count(*)` })
+      .from(attendance)
+      .where(whereClause);
+    const total = Number(totalResult[0]?.count || 0);
+
+    // Get attendance records
+    const attendanceRecords = await db
+      .select()
+      .from(attendance)
+      .where(whereClause)
+      .orderBy(desc(attendance.date))
+      .limit(parseInt(limit))
+      .offset(offset);
+
+    res.json({
+      success: true,
+      data: {
+        docs: attendanceRecords,
+        totalDocs: total,
+        limit: parseInt(limit),
+        page: parseInt(page),
+        totalPages: Math.ceil(total / parseInt(limit)),
+        hasNextPage: offset + parseInt(limit) < total,
+        hasPrevPage: parseInt(page) > 1,
+      }
+    });
+  } catch (error) {
+    console.error('Employee attendance fetch error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching employee attendance'
+    });
+  }
+});
+
+// @route   PUT /api/attendance/:id
+// @desc    Update attendance record
+// @access  Private (Admin/HR only)
+router.put('/:id', authenticate, authorize('admin', 'hr'), [
+  body('status').optional().isIn(['present', 'absent', 'late', 'half-day', 'leave']),
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = getDB();
+    const { id } = req.params;
+    const { status, notes } = req.body;
+
+    const updateData = {
+      updatedAt: new Date(),
+    };
+    if (status) updateData.status = status;
+    if (notes !== undefined) updateData.notes = notes;
+
+    const [updatedAttendance] = await db
+      .update(attendance)
+      .set(updateData)
+      .where(eq(attendance.id, id))
+      .returning();
+
+    if (!updatedAttendance) {
+      return res.status(404).json({
+        success: false,
+        message: 'Attendance record not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Attendance record updated successfully',
+      data: { attendance: updatedAttendance }
+    });
+  } catch (error) {
+    console.error('Attendance update error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while updating attendance'
+    });
+  }
+});
+
+// --- Admin check-in/check-out ---
+// @route   POST /api/attendance/admin/checkin
+// @desc    Admin check in an employee
+// @access  Private (Admin/HR only)
+router.post('/admin/checkin', authenticate, authorize('admin', 'hr'), [
+  body('employeeId').notEmpty().withMessage('Employee ID is required'),
+  body('location').optional().trim(),
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = getDB();
+    const { employeeId, location, notes } = req.body;
+
+    // Find employee
+    const [employee] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, employeeId))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    const today = moment().startOf('day').toDate();
+    const todayEnd = moment(today).endOf('day').toDate();
+
+    // Check if employee is on leave today
+    const [activeLeave] = await db
+      .select()
+      .from(leaves)
+      .where(
+        and(
+          eq(leaves.employeeId, employeeId),
+          eq(leaves.status, 'approved'),
+          lte(leaves.startDate, todayEnd),
+          gte(leaves.endDate, today)
+        )
+      )
+      .limit(1);
+
+    if (activeLeave) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot mark employee as present. Employee is on approved leave from ${moment(activeLeave.startDate).format('YYYY-MM-DD')} to ${moment(activeLeave.endDate).format('YYYY-MM-DD')}`
+      });
+    }
+
+    // Check if already checked in today
+    const [existingAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(
+        and(
+          eq(attendance.employeeId, employeeId),
+          gte(attendance.date, today),
+          lte(attendance.date, todayEnd),
+          isNotNull(attendance.checkInTime)
+        )
+      )
+      .limit(1);
+
+    if (existingAttendance) {
+      return res.status(400).json({
+        success: false,
+        message: 'Employee already checked in today'
+      });
+    }
+
+    const checkInTime = new Date();
+    const checkInData = {
+      employeeId,
+      date: today,
+      checkInTime,
+      checkInLocation: location || 'Office',
+      checkInIpAddress: req.ip || null,
+      checkInDeviceInfo: req.get('User-Agent') || null,
+      status: 'present',
+      notes: notes || null,
+    };
+
+    // Check if record exists without check-in
+    if (existingAttendance && !existingAttendance.checkInTime) {
+      const [updated] = await db
+        .update(attendance)
+        .set({
+          checkInTime,
+          checkInLocation: location || 'Office',
+          checkInIpAddress: req.ip || null,
+          checkInDeviceInfo: req.get('User-Agent') || null,
+          status: 'present',
+          notes: notes || existingAttendance.notes,
+          updatedAt: new Date(),
+        })
+        .where(eq(attendance.id, existingAttendance.id))
+        .returning();
+
+      const [employeeData] = await db
+        .select({
+          id: users.id,
+          name: users.name,
+          email: users.email,
+          employeeId: users.employeeId,
+          department: users.department,
+          position: users.position,
+        })
+        .from(users)
+        .where(eq(users.id, employeeId))
+        .limit(1);
+
+      return res.json({
+        success: true,
+        message: `Checked in ${employee.name} successfully`,
+        data: {
+          attendance: { ...updated, employee: employeeData },
+          checkInTime,
+          location: location || 'Office'
+        }
+      });
+    }
+
+    // Create new record
+    const [newAttendance] = await db
+      .insert(attendance)
+      .values(checkInData)
+      .returning();
+
+    const [employeeData] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        employeeId: users.employeeId,
+        department: users.department,
+        position: users.position,
+      })
+      .from(users)
+      .where(eq(users.id, employeeId))
+      .limit(1);
+
+    res.json({
+      success: true,
+      message: `Checked in ${employee.name} successfully`,
+      data: {
+        attendance: { ...newAttendance, employee: employeeData },
+        checkInTime,
+        location: location || 'Office'
+      }
+    });
+  } catch (error) {
+    console.error('Admin check-in error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during check-in'
+    });
+  }
+});
+
+// @route   POST /api/attendance/admin/checkout
+// @desc    Admin check out an employee
+// @access  Private (Admin/HR only)
+router.post('/admin/checkout', authenticate, authorize('admin', 'hr'), [
+  body('employeeId').notEmpty().withMessage('Employee ID is required'),
+  body('location').optional().trim(),
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = getDB();
+    const { employeeId, location, notes } = req.body;
+
+    // Find employee
+    const [employee] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, employeeId))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    const today = moment().startOf('day').toDate();
+    const todayEnd = moment(today).endOf('day').toDate();
+
+    // Find today's attendance record
+    const [attendanceRecord] = await db
+      .select()
+      .from(attendance)
+      .where(
+        and(
+          eq(attendance.employeeId, employeeId),
+          gte(attendance.date, today),
+          lte(attendance.date, todayEnd)
+        )
+      )
+      .limit(1);
+
+    if (!attendanceRecord) {
+      return res.status(400).json({
+        success: false,
+        message: 'No check-in record found for today'
+      });
+    }
+
+    if (attendanceRecord.checkOutTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Employee already checked out today'
+      });
+    }
+
+    const checkOutTime = new Date();
+    const checkInTime = new Date(attendanceRecord.checkInTime);
+    const diffInMs = checkOutTime - checkInTime;
+    const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
+    const workingHours = Math.max(0, diffInMinutes);
+    const standardHours = 480;
+    const overtime = Math.max(0, workingHours - standardHours);
+
+    const [updatedAttendance] = await db
+      .update(attendance)
+      .set({
+        checkOutTime,
+        checkOutLocation: location || 'Office',
+        checkOutIpAddress: req.ip || null,
+        checkOutDeviceInfo: req.get('User-Agent') || null,
+        workingHours,
+        overtime,
+        notes: notes || attendanceRecord.notes,
+        updatedAt: new Date(),
+      })
+      .where(eq(attendance.id, attendanceRecord.id))
+      .returning();
+
+    const [employeeData] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        employeeId: users.employeeId,
+        department: users.department,
+        position: users.position,
+      })
+      .from(users)
+      .where(eq(users.id, employeeId))
+      .limit(1);
+
+    res.json({
+      success: true,
+      message: `Checked out ${employee.name} successfully`,
+      data: {
+        attendance: { ...updatedAttendance, employee: employeeData },
+        checkOutTime,
+        workingHours,
+        overtime
+      }
+    });
+  } catch (error) {
+    console.error('Admin check-out error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during check-out'
+    });
+  }
+});
+
+// @route   POST /api/attendance/admin/update-status
+// @desc    Admin update attendance status by date and employee
+// @access  Private (Admin/HR only)
+router.post('/admin/update-status', authenticate, authorize('admin', 'hr'), [
+  body('employeeId').notEmpty().withMessage('Employee ID is required'),
+  body('date').notEmpty().withMessage('Date is required'),
+  body('status').isIn(['present', 'absent', 'late', 'half-day', 'leave']).withMessage('Invalid status'),
+  body('notes').optional().trim()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const db = getDB();
+    const { employeeId, date, status, notes } = req.body;
+
+    // Find employee
+    const [employee] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, employeeId))
+      .limit(1);
+
+    if (!employee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    // Parse and normalize date to start of day
+    const targetDate = moment(date).startOf('day').toDate();
+    const endOfDay = moment(targetDate).endOf('day').toDate();
+    const today = moment().startOf('day').toDate();
+
+    // Only allow editing today's date
+    if (targetDate.getTime() < today.getTime()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot edit past dates. Only today\'s attendance can be modified.'
+      });
+    }
+
+    // Check if date is in the future
+    if (targetDate.getTime() > today.getTime()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot edit future dates.'
+      });
+    }
+
+    // Check if employee is on leave for the target date (only if marking as present)
+    if (status === 'present') {
+      const [activeLeave] = await db
+        .select()
+        .from(leaves)
+        .where(
+          and(
+            eq(leaves.employeeId, employeeId),
+            eq(leaves.status, 'approved'),
+            lte(leaves.startDate, endOfDay),
+            gte(leaves.endDate, targetDate)
+          )
+        )
+        .limit(1);
+
+      if (activeLeave) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot mark employee as present. Employee is on approved leave from ${moment(activeLeave.startDate).format('YYYY-MM-DD')} to ${moment(activeLeave.endDate).format('YYYY-MM-DD')}`
+        });
+      }
+    }
+
+    // Find or create attendance record for the date
+    const [existingAttendance] = await db
+      .select()
+      .from(attendance)
+      .where(
+        and(
+          eq(attendance.employeeId, employeeId),
+          gte(attendance.date, targetDate),
+          lte(attendance.date, endOfDay)
+        )
+      )
+      .limit(1);
+
+    let attendanceRecord;
+
+    if (existingAttendance) {
+      // Update existing record
+      const updateData = {
+        status,
+        notes: notes || existingAttendance.notes,
+        updatedAt: new Date(),
+      };
+
+      // If marking as present and no check-in exists, create a check-in
+      if (status === 'present' && !existingAttendance.checkInTime) {
+        updateData.checkInTime = new Date();
+        updateData.checkInLocation = 'Office';
+        updateData.checkInIpAddress = req.ip || null;
+        updateData.checkInDeviceInfo = req.get('User-Agent') || null;
+      }
+
+      // If marking as absent, clear check-in/check-out
+      if (status === 'absent') {
+        updateData.checkInTime = null;
+        updateData.checkOutTime = null;
+        updateData.workingHours = 0;
+        updateData.overtime = 0;
+      }
+
+      const [updated] = await db
+        .update(attendance)
+        .set(updateData)
+        .where(eq(attendance.id, existingAttendance.id))
+        .returning();
+
+      attendanceRecord = updated;
+    } else {
+      // Create new attendance record
+      const attendanceData = {
+        employeeId,
+        date: targetDate,
+        status,
+        notes: notes || null,
+      };
+
+      // If marking as present, add check-in time
+      if (status === 'present') {
+        attendanceData.checkInTime = new Date();
+        attendanceData.checkInLocation = 'Office';
+        attendanceData.checkInIpAddress = req.ip || null;
+        attendanceData.checkInDeviceInfo = req.get('User-Agent') || null;
+      }
+
+      const [created] = await db
+        .insert(attendance)
+        .values(attendanceData)
+        .returning();
+
+      attendanceRecord = created;
+    }
+
+    const [employeeData] = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        employeeId: users.employeeId,
+        department: users.department,
+        position: users.position,
+      })
+      .from(users)
+      .where(eq(users.id, employeeId))
+      .limit(1);
+
+    res.json({
+      success: true,
+      message: `Attendance status updated to ${status} for ${employee.name}`,
+      data: {
+        attendance: {
+          ...attendanceRecord,
+          employee: employeeData
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Update attendance status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while updating attendance status'
+    });
+  }
+});
+
+// @route   GET /api/attendance/export/monthly
+// @desc    Export monthly attendance to Excel
+// @access  Private (Admin/HR only)
+router.get('/export/monthly', authenticate, authorize('admin', 'hr'), exportMonthlyExcel);
+
+export default router;
