@@ -56,7 +56,7 @@ const ensureDatabaseConnection = async (req, res, next) => {
     res.status(500).json({
       success: false,
       message: 'Database connection failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message // Temporarily exposed for debugging
     });
   }
 };

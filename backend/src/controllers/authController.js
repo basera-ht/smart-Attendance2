@@ -88,7 +88,7 @@ export const register = async (req, res) => {
     }
   } catch (error) {
     console.error('Registration error:', error);
-    
+
     // Handle duplicate key errors
     if (error.code === '23505') {
       return res.status(400).json({
@@ -96,11 +96,11 @@ export const register = async (req, res) => {
         message: 'User with this email or employee ID already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Error in user registration',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      error: error.message // Temporarily exposed for debugging
     });
   }
 };
