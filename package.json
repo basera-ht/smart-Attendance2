@@ -5,6 +5,7 @@
     "build": "npm run build --prefix frontend"
   },
   "dependencies": {
+    "@fingerprintjs/fingerprintjs": "^5.0.1",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.44.7",
     "pg": "^8.16.3"

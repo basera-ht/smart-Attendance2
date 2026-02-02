@@ -16,7 +16,8 @@ const router = express.Router();
 // @access  Private
 router.post('/checkin', authenticate, [
   body('location').optional().trim(),
-  body('notes').optional().trim()
+  body('notes').optional().trim(),
+  body('deviceId').notEmpty().withMessage('Device ID is required')
 ], checkIn);
 
 // @route   POST /api/attendance/checkout

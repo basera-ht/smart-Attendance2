@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import { getDB } from '../config/db.js';
 import { attendance, users, leaves, offices } from '../db/schema.js';
 import { getAllowedIpRangesFromEnv, getClientIp, isIpInRanges } from '../utils/ipUtils.js';
+import { verifyDevice } from '../services/deviceService.js';
 
 export const checkIn = async (req, res) => {
   try {
@@ -24,6 +25,24 @@ export const checkIn = async (req, res) => {
       .from(offices)
       .where(eq(offices.isActive, true));
 
+    // DEVICE VALIDATION
+    const { deviceId } = req.body;
+    if (!deviceId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Device ID is required for check-in.'
+      });
+    }
+
+    try {
+      await verifyDevice(employeeId, deviceId);
+    } catch (deviceError) {
+      return res.status(403).json({
+        success: false,
+        message: deviceError.message
+      });
+    }
+
     const officeRanges = activeOffices.flatMap((office) => office.allowedIPRanges || []);
     const envRanges = getAllowedIpRangesFromEnv();
     const allowedRanges = [...officeRanges, ...envRanges];
@@ -40,11 +59,11 @@ export const checkIn = async (req, res) => {
         message: 'Not on corporate network'
       });
     }
-    
+
     // Check if already checked in today
     const todayStart = moment().startOf('day').toDate();
     const todayEnd = moment().endOf('day').toDate();
-    
+
     const [existingAttendance] = await db
       .select()
       .from(attendance)
@@ -114,11 +133,11 @@ export const checkOut = async (req, res) => {
     const db = getDB();
     const employeeId = req.user.id;
     const today = moment().startOf('day').toDate();
-    
+
     // Find today's attendance record
     const todayStart = moment().startOf('day').toDate();
     const todayEnd = moment().endOf('day').toDate();
-    
+
     const [attendanceRecord] = await db
       .select()
       .from(attendance)
@@ -203,14 +222,14 @@ export const getAttendance = async (req, res) => {
     const db = getDB();
     const { page = 1, limit = 20, employee, startDate, endDate, department } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
+
     // Build filter conditions
     let conditions = [];
-    
+
     if (employee) {
       conditions.push(eq(attendance.employeeId, employee));
     }
-    
+
     if (startDate || endDate) {
       if (startDate) {
         conditions.push(gte(attendance.date, moment(startDate).startOf('day').toDate()));
@@ -304,10 +323,10 @@ export const getEmployeeAttendance = async (req, res) => {
     const employeeId = req.params.id || req.user.id;
     const { page = 1, limit = 30, startDate, endDate } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
+
     // Build filter conditions
     let conditions = [eq(attendance.employeeId, employeeId)];
-    
+
     if (startDate || endDate) {
       if (startDate) {
         conditions.push(gte(attendance.date, moment(startDate).startOf('day').toDate()));
@@ -375,7 +394,7 @@ export const updateAttendance = async (req, res) => {
   try {
     const db = getDB();
     const { checkInTime, checkOutTime, status, notes } = req.body;
-    
+
     const updateData = {};
     if (checkInTime) updateData.checkInTime = new Date(checkInTime);
     if (checkOutTime) updateData.checkOutTime = new Date(checkOutTime);
@@ -446,7 +465,7 @@ export const getTodayAttendance = async (req, res) => {
     const db = getDB();
     const today = moment().startOf('day').toDate();
     const tomorrow = moment(today).add(1, 'day').toDate();
-    
+
     const attendanceRecords = await db
       .select({
         attendance: attendance,
@@ -510,7 +529,7 @@ const getLeaveCode = (leaveType, isPaid) => {
   if (isPaid === false) {
     return 'UL'; // Unpaid Leave
   }
-  
+
   switch (leaveType) {
     case 'vacation':
       return 'PL'; // Paid Leave
@@ -532,7 +551,7 @@ const getLeaveCode = (leaveType, isPaid) => {
 // Helper function to get attendance status code
 const getStatusCode = (status) => {
   if (!status) return null;
-  
+
   switch (status.toLowerCase()) {
     case 'present':
       return 'P';
@@ -551,7 +570,7 @@ export const exportMonthlyExcel = async (req, res) => {
   try {
     const db = getDB();
     const { year, month } = req.query;
-    
+
     if (!year || !month) {
       return res.status(400).json({
         success: false,
@@ -561,7 +580,7 @@ export const exportMonthlyExcel = async (req, res) => {
 
     const yearNum = parseInt(year);
     const monthNum = parseInt(month); // 0-11 (JavaScript month format)
-    
+
     // Validate month (0-11)
     if (monthNum < 0 || monthNum > 11) {
       return res.status(400).json({
@@ -640,11 +659,11 @@ export const exportMonthlyExcel = async (req, res) => {
       const empId = record.employee?.id || record.leave.employeeId;
       const start = moment(record.leave.startDate);
       const end = moment(record.leave.endDate);
-      
+
       if (!leaveMap[empId]) {
         leaveMap[empId] = {};
       }
-      
+
       // Mark all days in leave range
       const current = moment(start);
       while (current.isSameOrBefore(end)) {
@@ -718,7 +737,7 @@ export const exportMonthlyExcel = async (req, res) => {
 
       monthDates.forEach(({ dateStr }) => {
         let statusCode = '';
-        
+
         // Check if it's a holiday first
         if (isHoliday(dateStr)) {
           statusCode = 'H';
@@ -744,7 +763,7 @@ export const exportMonthlyExcel = async (req, res) => {
             // Absent
           }
         }
-        
+
         row.push(statusCode);
       });
 
@@ -755,13 +774,13 @@ export const exportMonthlyExcel = async (req, res) => {
 
       // Style the row
       dataRow.alignment = { horizontal: 'center', vertical: 'middle' };
-      
+
       // Style cells based on status
       monthDates.forEach(({ dateStr }, index) => {
         const colIndex = index + 2;
         const cell = dataRow.getCell(colIndex);
         const statusCode = row[colIndex - 1];
-        
+
         if (statusCode === 'P') {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFC6EFCE' } }; // Green
         } else if (statusCode === 'HD') {
@@ -778,7 +797,7 @@ export const exportMonthlyExcel = async (req, res) => {
       // Style employee name column
       dataRow.getCell(1).alignment = { horizontal: 'left' };
       dataRow.getCell(1).font = { bold: true };
-      
+
       // Style total column
       const totalCell = dataRow.getCell(monthDates.length + 2);
       totalCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB4C6E7' } }; // Light Blue
