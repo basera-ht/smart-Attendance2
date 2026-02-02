@@ -173,7 +173,6 @@ export const employeesAPI = {
   updateEmployee: (id, data) => api.put(`/employees/${id}`, data),
   deleteEmployee: (id, permanent = false) => api.delete(`/employees/${id}${permanent ? '?permanent=true' : ''}`),
   resetDevice: (id) => api.put(`/employees/${id}/reset-device`),
-  updateDevice: (id, deviceId) => api.put(`/employees/${id}/device`, { deviceId }),
 }
 
 // Analytics API

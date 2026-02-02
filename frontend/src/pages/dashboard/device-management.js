@@ -9,10 +9,8 @@ import {
     Search,
     AlertTriangle,
     Smartphone,
-    SmartphoneNfc,
     RefreshCw,
-    Clock,
-    Edit2
+    Clock
 } from 'lucide-react'
 import moment from 'moment'
 import { toast } from 'react-hot-toast'
@@ -26,9 +24,6 @@ export default function DeviceManagement() {
     const [resetModalOpen, setResetModalOpen] = useState(false)
     const [selectedEmployee, setSelectedEmployee] = useState(null)
     const [resetting, setResetting] = useState(false)
-    const [editModalOpen, setEditModalOpen] = useState(false)
-    const [newDeviceId, setNewDeviceId] = useState('')
-    const [saving, setSaving] = useState(false)
 
     useEffect(() => {
         if (!authLoading && user) {
@@ -74,34 +69,6 @@ export default function DeviceManagement() {
             toast.error('Failed to reset device')
         } finally {
             setResetting(false)
-            setSelectedEmployee(null)
-        }
-    }
-
-    const handleEditClick = (employee) => {
-        setSelectedEmployee(employee)
-        setNewDeviceId(employee.registeredDeviceId || '')
-        setEditModalOpen(true)
-    }
-
-    const saveDeviceId = async () => {
-        if (!selectedEmployee) return
-        if (!newDeviceId.trim()) {
-            toast.error('Device ID cannot be empty')
-            return
-        }
-
-        try {
-            setSaving(true)
-            await employeesAPI.updateDevice(selectedEmployee.id, newDeviceId.trim())
-            toast.success(`Device ID updated for ${selectedEmployee.name}`)
-            setEditModalOpen(false)
-            fetchEmployees() // Refresh list
-        } catch (error) {
-            console.error('Update error:', error)
-            toast.error('Failed to update device ID')
-        } finally {
-            setSaving(false)
             setSelectedEmployee(null)
         }
     }
@@ -211,26 +178,15 @@ export default function DeviceManagement() {
                                             )}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                            <div className="flex items-center justify-end space-x-2">
-                                                {employee.registeredDeviceId && (
-                                                    <button
-                                                        onClick={() => handleResetClick(employee)}
-                                                        className="text-orange-600 hover:text-orange-900 bg-orange-50 hover:bg-orange-100 px-3 py-1 rounded-md transition-colors flex items-center"
-                                                        title="Reset Device Binding"
-                                                    >
-                                                        <RefreshCw className="w-3 h-3 mr-1" />
-                                                        Reset
-                                                    </button>
-                                                )}
+                                            {employee.registeredDeviceId && (
                                                 <button
-                                                    onClick={() => handleEditClick(employee)}
-                                                    className="text-blue-600 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-md transition-colors flex items-center"
-                                                    title="Edit Device ID"
+                                                    onClick={() => handleResetClick(employee)}
+                                                    className="text-orange-600 hover:text-orange-900 bg-orange-50 hover:bg-orange-100 px-3 py-1 rounded-md transition-colors flex items-center ml-auto"
                                                 >
-                                                    <Edit2 className="w-3 h-3 mr-1" />
-                                                    Edit
+                                                    <RefreshCw className="w-3 h-3 mr-1" />
+                                                    Reset Device
                                                 </button>
-                                            </div>
+                                            )}
                                         </td>
                                     </tr>
                                 ))}
@@ -293,69 +249,6 @@ export default function DeviceManagement() {
                                     type="button"
                                     onClick={() => setResetModalOpen(false)}
                                     disabled={resetting}
-                                    className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
-                                >
-                                    Cancel
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Edit Device Modal */}
-            {editModalOpen && selectedEmployee && (
-                <div className="fixed inset-0 z-50 overflow-y-auto">
-                    <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-                        <div className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" onClick={() => setEditModalOpen(false)}></div>
-
-                        <span className="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
-
-                        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-                            <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-                                <div className="sm:flex sm:items-start">
-                                    <div className="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-blue-100 sm:mx-0 sm:h-10 sm:w-10">
-                                        <Smartphone className="h-6 w-6 text-blue-600" />
-                                    </div>
-                                    <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left w-full">
-                                        <h3 className="text-lg leading-6 font-medium text-gray-900" id="modal-title">
-                                            Edit Device ID
-                                        </h3>
-                                        <div className="mt-2">
-                                            <p className="text-sm text-gray-500 mb-4">
-                                                Manually update the device ID for <strong>{selectedEmployee.name}</strong>.
-                                            </p>
-                                            <div>
-                                                <label htmlFor="deviceId" className="block text-sm font-medium text-gray-700">
-                                                    Device ID
-                                                </label>
-                                                <input
-                                                    type="text"
-                                                    name="deviceId"
-                                                    id="deviceId"
-                                                    className="mt-1 focus:ring-blue-500 focus:border-blue-500 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md p-2 border"
-                                                    placeholder="Enter Device ID"
-                                                    value={newDeviceId}
-                                                    onChange={(e) => setNewDeviceId(e.target.value)}
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="bg-gray-50 px-4 py-3 sm:px-6 sm:flex sm:flex-row-reverse">
-                                <button
-                                    type="button"
-                                    onClick={saveDeviceId}
-                                    disabled={saving}
-                                    className="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:ml-3 sm:w-auto sm:text-sm disabled:opacity-50"
-                                >
-                                    {saving ? 'Saving...' : 'Save Changes'}
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setEditModalOpen(false)}
-                                    disabled={saving}
                                     className="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 sm:mt-0 sm:ml-3 sm:w-auto sm:text-sm"
                                 >
                                     Cancel
