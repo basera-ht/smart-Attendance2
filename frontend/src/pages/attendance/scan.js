@@ -315,34 +315,18 @@ export default function QRScanPage() {
         return
       }
 
-      const parsed = parseJwt(token)
-      const publicKey = await getPublicKey(parsed.header?.kid)
-      const verified = await verifyJwt(token, publicKey)
-      if (!verified) {
-        setError('QR token signature verification failed.')
-        setProcessing(false)
-        return
-      }
-
-      const expMs = parsed.payload?.exp ? parsed.payload.exp * 1000 : null
-      if (expMs && expMs < Date.now()) {
-        setError('QR token has expired. Please request a new one.')
-        setProcessing(false)
-        return
-      }
-
-      const info = getNetworkInfo()
-      setNetworkInfo(info)
-      if (info.isCellular) {
-        setError('Cellular network detected. Connect to office Wi-Fi.')
-        setProcessing(false)
-        return
-      }
+      // We rely on the Server for strict validation (Time, IP, Network).
+      // This prevents false negatives from client-side clock skew or network API flakes.
 
       const isOnline = navigator.onLine
       const authToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null
+
+      // Get network info purely for logging/server usage
+      const info = getNetworkInfo()
+      setNetworkInfo(info)
+
       const attempt = await saveAttendanceAttempt({
-        token: decodedQR.token,
+        token,
         scannedAt: new Date().toISOString(),
         networkState: isOnline ? 'ONLINE' : 'OFFLINE',
         networkType: info.networkType,
@@ -369,7 +353,9 @@ export default function QRScanPage() {
 
       if (response.data?.success) {
         const resultItem = response.data?.data?.results?.[0]
+        // If the server returned a result list (bulk sync style) or direct data
         const resultStatus = resultItem?.status || 'FINAL'
+
         await updateQueueRecord({
           ...attempt,
           status: resultStatus

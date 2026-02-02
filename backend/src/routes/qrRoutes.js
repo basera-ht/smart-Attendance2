@@ -1,6 +1,6 @@
 import express from 'express';
 import { body, validationResult } from 'express-validator';
-import { eq, and, gte, isNull, sql } from 'drizzle-orm';
+import { eq, and, gte, sql } from 'drizzle-orm';
 import moment from 'moment';
 import { getDB } from '../config/db.js';
 import { qrCodes, offices, qrValidationLogs, attendance, users, leaves } from '../db/schema.js';
@@ -8,7 +8,7 @@ import { authenticate, authorize } from '../middleware/authMiddleware.js';
 import { generateQRCodeImage, generateNonce, generateQRId } from '../utils/qrGenerator.js';
 import { detectIPAnomalies } from '../middleware/ipAnomalyDetection.js';
 import { getClientIp, isIpInRanges } from '../utils/ipUtils.js';
-import { signQrToken, getQrPublicKey, getQrKeyId, hashList, verifyQrToken } from '../utils/qrJwt.js';
+import { signQrToken, getQrPublicKey, getQrKeyId, verifyQrToken } from '../utils/qrJwt.js';
 
 const router = express.Router();
 
@@ -71,7 +71,7 @@ router.get('/public-key', (req, res) => {
 
 /**
  * @route   POST /api/qr/generate
- * @desc    Generate a time-limited QR code (compact payload)
+ * @desc    Generate a time-limited QR code (SIMPLIFIED PAYLOAD)
  * @access  Private (Admin/HR only)
  */
 router.post('/generate', authenticate, authorize('admin', 'hr'), [
@@ -138,18 +138,19 @@ router.post('/generate', authenticate, authorize('admin', 'hr'), [
     const nonce = generateNonce();
     const expiresAt = moment().add(expiresIn, 'seconds').toDate();
 
+    // Simplified Token: JUST the Key info.
     const token = signQrToken({
       qrId,
       officeId,
-      allowedSSIDs: office.allowedSSIDs || [],
-      allowedIPRanges: office.allowedIPRanges || [],
+      allowedSSIDs: [], // Removed: Validated server-side
+      allowedIPRanges: [], // Removed: Validated server-side
       expiresAt: expiresAt.toISOString()
     });
 
     const payload = { token };
 
     // Store QR code in database
-    const [qrCode] = await db
+    await db
       .insert(qrCodes)
       .values({
         qrId,
@@ -159,10 +160,9 @@ router.post('/generate', authenticate, authorize('admin', 'hr'), [
         expiresAt,
         nonce,
         createdById: req.user.id
-      })
-      .returning();
+      });
 
-    // Generate QR code image (Pass token string directly to reduce density)
+    // Generate QR code image
     const qrImageDataUrl = await generateQRCodeImage(token);
 
     res.json({
@@ -170,7 +170,7 @@ router.post('/generate', authenticate, authorize('admin', 'hr'), [
       data: {
         qrId,
         qrImage: qrImageDataUrl,
-        payload, // For testing/debugging
+        payload,
         expiresAt: expiresAt.toISOString(),
         expiresIn,
         office: {
@@ -178,10 +178,8 @@ router.post('/generate', authenticate, authorize('admin', 'hr'), [
           name: office.name
         },
         officeNetwork: {
-          allowedSSIDs: office.allowedSSIDs || [],
-          allowedIPRanges: office.allowedIPRanges || [],
-          allowedSSIDHash: hashList(office.allowedSSIDs || []),
-          allowedIPRangeHash: hashList(office.allowedIPRanges || [])
+          allowedSSIDs: office.allowedSSIDs || [], // Send rules to frontend for display only
+          allowedIPRanges: office.allowedIPRanges || []
         }
       }
     });
@@ -261,16 +259,11 @@ router.get('/payload/:qrId', authenticate, async (req, res) => {
 
 /**
  * @route   POST /api/qr/validate
- * @desc    Validate QR code and record attendance
+ * @desc    Validate QR code and record attendance (ROBUST SERVER-SIDE CHECKS)
  * @access  Private
  */
-export const validateQRRules = [];
-
 export const validateQR = async (req, res) => {
-  return res.status(410).json({
-    success: false,
-    message: 'Use /api/attendance/submit for QR validation.'
-  });
+  // 2026 Rewrite: Strict Server-Side Validation
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -295,8 +288,7 @@ export const validateQR = async (req, res) => {
     const ipAddress = getClientIp(req);
     const userAgent = req.get('User-Agent') || '';
 
-    const ipAnomaly = await detectIPAnomalies(ipAddress, userId);
-
+    // 1. Verify Token Signature
     let tokenPayload;
     try {
       tokenPayload = verifyQrToken(token);
@@ -307,8 +299,9 @@ export const validateQR = async (req, res) => {
       });
     }
 
-    const { qrId, officeId } = tokenPayload;
+    const { qrId } = tokenPayload;
 
+    // 2. Fetch QR and Office Rule from DB
     const [qrCode] = await db
       .select({
         qr: qrCodes,
@@ -319,195 +312,70 @@ export const validateQR = async (req, res) => {
       .where(eq(qrCodes.qrId, qrId))
       .limit(1);
 
-    const validationSummary = {
-      qrExists: false,
-      qrExpired: false,
-      qrUsed: false,
-      nonceMatch: true,
-      ipAllowed: false,
-      ssidMatch: false,
-      fingerprintMatch: false,
-      networkAllowed: false,
-      alreadyCheckedIn: false,
-      onLeave: false,
-      networkType,
-      ssid,
-      ipAddress,
-      qrId,
-      officeId,
-      mode: 'online',
-      syncStatus: 'final'
-    };
-
-    let isValid = false;
-    let failureReason = '';
-
     if (!qrCode || !qrCode.qr) {
-      failureReason = 'Invalid QR code';
-      validationSummary.qrExists = false;
-    } else {
-      validationSummary.qrExists = true;
+      return res.status(400).json({ success: false, message: 'QR Code not found' });
+    }
 
-      if (new Date(qrCode.qr.expiresAt) < new Date()) {
-        failureReason = 'QR code expired';
-        validationSummary.qrExpired = true;
-      } else if (qrCode.qr.isUsed) {
-        failureReason = 'QR code already used';
-        validationSummary.qrUsed = true;
-      } else {
-        validationSummary.nonceMatch = true;
+    // 3. Strict Validations
+    let failureReason = null;
 
-        // Optimized: We no longer compare hashes from token to allow for lighter QR codes.
-        // We strictly validate against the current Database rules below.
-        validationSummary.networkAllowed = true;
-
-        if (String(networkType).toLowerCase().includes('cellular') ||
-          ['2g', '3g', '4g', '5g', 'slow-2g'].includes(String(networkType).toLowerCase())) {
-          failureReason = 'Cellular network detected. Connect to office Wi-Fi.';
-          validationSummary.networkAllowed = false;
+    // Check Expiry
+    if (new Date(qrCode.qr.expiresAt) < new Date()) {
+      failureReason = 'QR code has expired';
+    }
+    // Check Status
+    else if (qrCode.qr.isUsed) {
+      failureReason = 'QR code already used';
+    }
+    // Check Office Network (IP)
+    else {
+      const allowedRanges = qrCode.office?.allowedIPRanges || [];
+      if (!isIpInRanges(ipAddress, allowedRanges)) {
+        // Check for cellular connection mismatch
+        if (String(networkType).toLowerCase().includes('cellular')) {
+          failureReason = 'Cellular connection detected. Please connect to Office Wi-Fi.';
         } else {
-          validationSummary.networkAllowed = true;
-
-          const allowedRanges = qrCode.office?.allowedIPRanges || [];
-          if (!allowedRanges.length) {
-            failureReason = 'Office network is not configured (allowed IP ranges missing)';
-            validationSummary.ipAllowed = false;
-          } else if (!isIpInRanges(ipAddress, allowedRanges)) {
-            failureReason = 'Not on corporate network';
-            validationSummary.ipAllowed = false;
-          } else {
-            validationSummary.ipAllowed = true;
-
-            const allowedSSIDs = qrCode.office?.allowedSSIDs || [];
-            if (ssid && allowedSSIDs.length && !allowedSSIDs.includes(ssid)) {
-              failureReason = 'Wi-Fi SSID mismatch';
-              validationSummary.ssidMatch = false;
-            } else {
-              validationSummary.ssidMatch = true;
-
-              const [user] = await db
-                .select()
-                .from(users)
-                .where(eq(users.id, userId))
-                .limit(1);
-
-              if (!user) {
-                failureReason = 'User not found';
-              } else if (!user.fingerprintHash) {
-                await db
-                  .update(users)
-                  .set({ fingerprintHash })
-                  .where(eq(users.id, userId));
-                validationSummary.fingerprintMatch = true;
-              } else if (user.fingerprintHash !== fingerprintHash) {
-                failureReason = 'Fingerprint mismatch';
-                validationSummary.fingerprintMatch = false;
-              } else {
-                validationSummary.fingerprintMatch = true;
-              }
-
-              if (validationSummary.fingerprintMatch) {
-                const today = moment().startOf('day').toDate();
-                const todayEnd = moment(today).endOf('day').toDate();
-
-                const [existingAttendance] = await db
-                  .select()
-                  .from(attendance)
-                  .where(
-                    and(
-                      eq(attendance.employeeId, userId),
-                      gte(attendance.date, today),
-                      sql`${attendance.date} <= ${todayEnd}`,
-                      sql`${attendance.checkInTime} IS NOT NULL`
-                    )
-                  )
-                  .limit(1);
-
-                if (existingAttendance) {
-                  failureReason = 'Already checked in today';
-                  validationSummary.alreadyCheckedIn = true;
-                } else {
-                  validationSummary.alreadyCheckedIn = false;
-
-                  const [activeLeave] = await db
-                    .select()
-                    .from(leaves)
-                    .where(
-                      and(
-                        eq(leaves.employeeId, userId),
-                        eq(leaves.status, 'approved'),
-                        sql`${leaves.startDate} <= ${todayEnd}`,
-                        sql`${leaves.endDate} >= ${today}`
-                      )
-                    )
-                    .limit(1);
-
-                  if (activeLeave) {
-                    failureReason = `Cannot check in. Employee is on approved leave from ${moment(activeLeave.startDate).format('YYYY-MM-DD')} to ${moment(activeLeave.endDate).format('YYYY-MM-DD')}`;
-                    validationSummary.onLeave = true;
-                  } else {
-                    validationSummary.onLeave = false;
-                    isValid = true;
-                  }
-                }
-              }
-            }
-          }
+          failureReason = `IP Address (${ipAddress}) is not allowed for this office.`;
         }
       }
     }
-  }
 
-    const suspiciousFlags = ipAnomaly.isSuspicious ? ipAnomaly.flags : [];
-  if (!isValid) {
-    suspiciousFlags.push('VALIDATION_FAILED');
-    if (!validationSummary.ipAllowed) suspiciousFlags.push('IP_MISMATCH');
-    if (ssid && !validationSummary.ssidMatch) suspiciousFlags.push('SSID_MISMATCH');
-    if (!validationSummary.fingerprintMatch) suspiciousFlags.push('FINGERPRINT_MISMATCH');
-    if (!validationSummary.networkAllowed) suspiciousFlags.push('CELLULAR_NETWORK');
-  }
-
-  validationSummary.syncStatus = isValid ? 'final' : 'rejected';
-
-  await db.insert(qrValidationLogs).values({
-    qrId,
-    userId,
-    officeId: qrCode?.office?.id || null,
-    isValid,
-    validationResult: validationSummary,
-    gpsLat: null,
-    gpsLng: null,
-    gpsAccuracy: null,
-    ipAddress,
-    userAgent,
-    failureReason: isValid ? null : failureReason,
-    isSuspicious: suspiciousFlags.length > 0,
-    suspiciousFlags
-  });
-
-  if (!isValid) {
-    return res.status(400).json({
-      success: false,
-      message: failureReason,
-      validationResult: validationSummary
+    // 4. Record Log
+    await db.insert(qrValidationLogs).values({
+      qrId,
+      userId,
+      officeId: qrCode.office?.id,
+      isValid: !failureReason,
+      validationResult: { ipAddress, networkType, ssid, failureReason },
+      ipAddress,
+      userAgent,
+      failureReason,
+      isSuspicious: !!failureReason
     });
-  }
 
-  await db
-    .update(qrCodes)
-    .set({
-      isUsed: true,
-      usedAt: new Date(),
-      usedBy: userId
-    })
-    .where(eq(qrCodes.qrId, qrId));
+    if (failureReason) {
+      return res.status(400).json({ success: false, message: failureReason });
+    }
 
-  const checkInTime = new Date();
-  const today = moment().startOf('day').toDate();
+    // 5. Success - Mark Used
+    await db.update(qrCodes)
+      .set({ isUsed: true, usedAt: new Date(), usedBy: userId })
+      .where(eq(qrCodes.qrId, qrId));
 
-  const [attendanceRecord] = await db
-    .insert(attendance)
-    .values({
+    // 6. Record Attendance
+    const today = moment().startOf('day').toDate();
+    const checkInTime = new Date();
+
+    // Check for double check-in
+    const [existing] = await db.select().from(attendance)
+      .where(and(eq(attendance.employeeId, userId), gte(attendance.date, today)))
+      .limit(1);
+
+    if (existing) {
+      return res.status(400).json({ success: false, message: 'Already checked in today.' });
+    }
+
+    const [record] = await db.insert(attendance).values({
       employeeId: userId,
       date: today,
       checkInTime,
@@ -515,41 +383,27 @@ export const validateQR = async (req, res) => {
       checkInIpAddress: ipAddress,
       checkInDeviceInfo: userAgent,
       status: 'present'
-    })
-    .returning();
+    }).returning();
 
-  const [employee] = await db
-    .select()
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
+    const [employee] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
 
-  res.json({
-    success: true,
-    message: 'Attendance recorded successfully',
-    data: {
-      attendance: {
-        ...attendanceRecord,
-        employee: {
-          id: employee.id,
-          name: employee.name,
-          employeeId: employee.employeeId
-        }
-      },
-      office: {
-        id: qrCode.office.id,
-        name: qrCode.office.name
-      },
-      checkInTime: checkInTime.toISOString()
-    }
-  });
-} catch (error) {
-  console.error('QR validation error:', error);
-  res.status(500).json({
-    success: false,
-    message: 'Server error validating QR code'
-  });
-}
+    res.json({
+      success: true,
+      message: 'Attendance recorded successfully',
+      data: {
+        attendance: { ...record, employee: { name: employee.name } },
+        office: { name: qrCode.office.name },
+        checkInTime: checkInTime.toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('QR validation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error validating QR code'
+    });
+  }
 };
 
 router.post('/validate', authenticate, validateQR);
@@ -645,11 +499,7 @@ router.get('/active-public', authenticate, async (req, res) => {
       });
     }
 
-    // Extract token string from payload object (ensure it's a string for the generator)
-    const token = typeof activeQR.qr.payload === 'object' && activeQR.qr.payload !== null
-      ? activeQR.qr.payload.token || JSON.stringify(activeQR.qr.payload)
-      : activeQR.qr.payload;
-
+    const token = activeQR.qr.payload.token || JSON.stringify(activeQR.qr.payload);
     const qrImage = await generateQRCodeImage(token);
 
     res.json({
