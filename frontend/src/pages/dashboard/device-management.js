@@ -162,9 +162,15 @@ export default function DeviceManagement() {
                                                     </span>
                                                 </div>
                                             ) : (
-                                                <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-                                                    Unlinked
-                                                </span>
+                                                <div className="flex flex-col">
+                                                    <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
+                                                        Unlinked
+                                                    </span>
+                                                    {/* DEBUG: Show what the value actually is if it exists but is falsy/empty */}
+                                                    <span className="text-[10px] text-gray-400">
+                                                        Raw: {JSON.stringify(employee.registeredDeviceId)}
+                                                    </span>
+                                                </div>
                                             )}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
