@@ -18,9 +18,13 @@ import fs from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure logs directory exists
+// Ensure logs directory exists (only in development or non-serverless)
 const logsDir = path.join(__dirname, '../../logs');
-if (!fs.existsSync(logsDir)) {
+// In Vercel/Serverless, we typically can't write to local fs (except /tmp), 
+// and we should rely on stdout (console) which Vercel captures.
+const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+
+if (!isServerless && !fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
@@ -36,13 +40,13 @@ const developmentFormat = winston.format.combine(
   winston.format.colorize(),
   winston.format.printf(({ timestamp, level, message, ...meta }) => {
     let msg = `${timestamp} [${level}]: ${message}`;
-    
+
     // Add metadata if present
     if (Object.keys(meta).length > 0) {
       const metaStr = JSON.stringify(meta, null, 2);
       msg += `\n${metaStr}`;
     }
-    
+
     return msg;
   })
 );
@@ -61,31 +65,39 @@ const fileFormat = winston.format.combine(
   winston.format.json()
 );
 
-// Daily rotate file transport for combined logs
-const combinedFileTransport = new DailyRotateFile({
-  filename: path.join(logsDir, 'combined-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  maxSize: '20m',
-  maxFiles: '14d', // Keep logs for 14 days
-  format: fileFormat,
-  level: 'info',
-});
-
-// Daily rotate file transport for error logs
-const errorFileTransport = new DailyRotateFile({
-  filename: path.join(logsDir, 'error-%DATE%.log'),
-  datePattern: 'YYYY-MM-DD',
-  maxSize: '20m',
-  maxFiles: '30d', // Keep error logs for 30 days
-  format: fileFormat,
-  level: 'error',
-});
-
 // Console transport with different formats for dev/prod
 const consoleTransport = new winston.transports.Console({
   format: isDevelopment ? developmentFormat : productionFormat,
   level: logLevel,
 });
+
+const transports = [consoleTransport];
+
+// Only add file transports if we are allowed to write to disk
+if (!isServerless) {
+  // Daily rotate file transport for combined logs
+  const combinedFileTransport = new DailyRotateFile({
+    filename: path.join(logsDir, 'combined-%DATE%.log'),
+    datePattern: 'YYYY-MM-DD',
+    maxSize: '20m',
+    maxFiles: '14d', // Keep logs for 14 days
+    format: fileFormat,
+    level: 'info',
+  });
+
+  // Daily rotate file transport for error logs
+  const errorFileTransport = new DailyRotateFile({
+    filename: path.join(logsDir, 'error-%DATE%.log'),
+    datePattern: 'YYYY-MM-DD',
+    maxSize: '20m',
+    maxFiles: '30d', // Keep error logs for 30 days
+    format: fileFormat,
+    level: 'error',
+  });
+
+  transports.push(combinedFileTransport, errorFileTransport);
+}
+
 
 // Create Winston logger instance
 const logger = winston.createLogger({
@@ -95,32 +107,32 @@ const logger = winston.createLogger({
     service: 'lushai-attendance-backend',
     environment: process.env.NODE_ENV || 'development',
   },
-  transports: [
-    consoleTransport,
-    combinedFileTransport,
-    errorFileTransport,
-  ],
+  transports: transports,
   // Handle exceptions and rejections
-  exceptionHandlers: [
+  exitOnError: false,
+});
+
+if (!isServerless) {
+  logger.exceptions.handle(
     new DailyRotateFile({
       filename: path.join(logsDir, 'exceptions-%DATE%.log'),
       datePattern: 'YYYY-MM-DD',
       maxSize: '20m',
       maxFiles: '30d',
       format: fileFormat,
-    }),
-  ],
-  rejectionHandlers: [
+    })
+  );
+
+  logger.rejections.handle(
     new DailyRotateFile({
       filename: path.join(logsDir, 'rejections-%DATE%.log'),
       datePattern: 'YYYY-MM-DD',
       maxSize: '20m',
       maxFiles: '30d',
       format: fileFormat,
-    }),
-  ],
-  exitOnError: false,
-});
+    })
+  );
+}
 
 /**
  * Create a child logger with additional context/metadata
