@@ -8,15 +8,13 @@ dotenv.config();
 let dbCredentials;
 
 if (process.env.DATABASE_URL) {
-  console.log('DATABASE_URL exists');
   // Parse DATABASE_URL: postgresql://user:password@host:port/database
-  const url = new URL(process.env.DATABASE_URL);
+  // We can just pass the url to drizzle-kit, but if we need individual fields:
+  // Note: drizzle-kit mostly uses the `url` property or individual params.
+  // We will prioritize the URL.
+
   dbCredentials = {
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT || '5432'),
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
+    url: process.env.DATABASE_URL,
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
     schemaFilter: 'smart_attendance',
   };
