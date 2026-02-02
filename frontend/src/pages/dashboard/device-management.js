@@ -1,9 +1,9 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
-import { useAuth } from '../../../hooks/useAuth'
-import { employeesAPI } from '../../../services/api'
-import Layout from '../../../components/Layout'
+import { useAuth } from '../../hooks/useAuth'
+import { employeesAPI } from '../../services/api'
+import DashboardLayout from '../../components/DashboardLayout'
 import {
     Users,
     Search,
@@ -82,16 +82,16 @@ export default function DeviceManagement() {
 
     if (authLoading || (loading && employees.length === 0)) {
         return (
-            <Layout>
+            <DashboardLayout>
                 <div className="flex justify-center items-center h-screen">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
                 </div>
-            </Layout>
+            </DashboardLayout>
         )
     }
 
     return (
-        <Layout>
+        <DashboardLayout>
             <div className="p-6">
                 <div className="mb-6 flex justify-between items-center">
                     <div>
@@ -259,6 +259,6 @@ export default function DeviceManagement() {
                     </div>
                 </div>
             )}
-        </Layout>
+        </DashboardLayout>
     )
 }
