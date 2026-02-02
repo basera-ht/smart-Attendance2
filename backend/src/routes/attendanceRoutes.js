@@ -3,11 +3,11 @@ import { body, validationResult } from 'express-validator';
 import { eq, and, gte, lte, desc, asc, sql, isNotNull } from 'drizzle-orm';
 import moment from 'moment';
 import { getDB } from '../config/db.js';
-import { attendance, users, leaves, qrCodes, offices, qrValidationLogs } from '../db/schema.js';
+import { attendance, users, leaves, offices } from '../db/schema.js';
 import { authenticate, authorize } from '../middleware/authMiddleware.js';
 import { checkIn, checkOut, exportMonthlyExcel } from '../controllers/attendanceController.js';
 import { getClientIp, isIpInRanges } from '../utils/ipUtils.js';
-import { verifyQrToken, hashList } from '../utils/qrJwt.js';
+
 
 const router = express.Router();
 
@@ -31,485 +31,104 @@ router.post('/checkout', authenticate, [
 // @desc    Deprecated: use /attendance/submit
 // @access  Private
 
-// @route   POST /api/attendance/sync
-// @desc    Deprecated: use /attendance/submit
+// @route   POST /api/attendance/checkin-secure
+// @desc    Secure Geofence Check-In (No QR)
 // @access  Private
 
-const handleAttendanceSubmit = async (req, res) => {
+
+router.post('/checkin-secure', authenticate, async (req, res) => {
   try {
     const db = getDB();
     const userId = req.user.id;
     const ipAddress = getClientIp(req);
     const userAgent = req.get('User-Agent') || '';
 
-    const records = Array.isArray(req.body?.records) ? req.body.records : [req.body];
-    const normalizedRecords = records
-      .filter((record) => record && typeof record === 'object')
-      .map((record) => ({
-        id: record.id,
-        token: record.token,
-        scannedAt: record.scannedAt,
-        networkState: record.networkState || 'ONLINE',
-        networkType: record.networkType || 'unknown',
-        ssid: record.ssid || null
-      }))
-      .filter((record) => record.token && record.scannedAt);
+    // 1. Get Active Offices
+    const activeOffices = await db.select().from(offices).where(eq(offices.isActive, true));
 
-    if (!normalizedRecords.length) {
+    if (!activeOffices.length) {
+      return res.status(400).json({ success: false, message: 'No active offices found.' });
+    }
+
+    // 2. Strict IP Check (Wi-Fi Validation)
+    let matchedOffice = null;
+
+    for (const office of activeOffices) {
+      if (office.allowedIPRanges && office.allowedIPRanges.length > 0) {
+        if (isIpInRanges(ipAddress, office.allowedIPRanges)) {
+          matchedOffice = office;
+          break;
+        }
+        // IP Check (Primary Guard)
+        let ipMatch = true;
+        if (office.allowedIPRanges && office.allowedIPRanges.length > 0) {
+          ipMatch = isIpInRanges(ipAddress, office.allowedIPRanges);
+        }
+
+        if (!ipMatch) continue; // Must match IP first
+
+        // GPS Check (Secondary Guard)
+        if (office.latitude && office.longitude) {
+          const officeLoc = { lat: parseFloat(office.latitude), lon: parseFloat(office.longitude) };
+          const dist = haversine(userLoc, officeLoc); // Meters
+
+          if (dist <= MAX_DISTANCE && dist < minDistance) {
+            minDistance = dist;
+            matchedOffice = office;
+          }
+        }
+      }
+    }
+
+    if (!matchedOffice) {
+      // Construct detailed error
+      // If IP matched none:
+      const ipMatches = activeOffices.some(o => o.allowedIPRanges && o.allowedIPRanges.length > 0 && isIpInRanges(ipAddress, o.allowedIPRanges));
+      if (!ipMatches) {
+        return res.status(400).json({ success: false, message: 'Network Mismatch: Connect to Office Wi-Fi.' });
+      }
       return res.status(400).json({
         success: false,
-        message: 'No valid submission records provided'
+        message: `Location Mismatch: You are too far from the office.`,
+        details: { distance: minDistance === Infinity ? 'Unknown' : Math.round(minDistance) }
       });
     }
 
-    normalizedRecords.sort((a, b) => new Date(a.scannedAt) - new Date(b.scannedAt));
+    // 4. Record Attendance
+    const today = moment().startOf('day').toDate();
+    const [existing] = await db.select().from(attendance)
+      .where(and(eq(attendance.employeeId, userId), gte(attendance.date, today)))
+      .limit(1);
 
-    const results = [];
+    if (existing) return res.status(400).json({ success: false, message: "Already checked in today" });
 
-    const logSubmission = async ({ qrId, officeId, isValid, failureReason, validationResult, suspiciousFlags = [] }) => {
-      await db.insert(qrValidationLogs).values({
-        qrId,
-        userId,
-        officeId,
-        isValid,
-        validationResult,
-        gpsLat: null,
-        gpsLng: null,
-        gpsAccuracy: null,
-        ipAddress,
-        userAgent,
-        failureReason: isValid ? null : failureReason,
-        isSuspicious: !isValid,
-        suspiciousFlags: isValid ? [] : suspiciousFlags
-      });
-    };
-
-    for (const record of normalizedRecords) {
-      let tokenPayload;
-      try {
-        tokenPayload = verifyQrToken(record.token);
-      } catch (error) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Invalid or expired QR token'
-        });
-        await logSubmission({
-          qrId: null,
-          officeId: null,
-          isValid: false,
-          failureReason: 'Invalid or expired QR token',
-          validationResult: {
-            mode: 'offline',
-            syncStatus: 'rejected',
-            scannedAt: record.scannedAt,
-            networkType: record.networkType,
-            ssid: record.ssid,
-            ipAddress,
-            networkState: record.networkState
-          },
-          suspiciousFlags: ['INVALID_TOKEN']
-        });
-        continue;
-      }
-
-      const { qrId, officeId, allowedSSIDHash, allowedIPRangeHash, exp } = tokenPayload;
-      const scannedAtDate = new Date(record.scannedAt);
-      const scannedAtTime = scannedAtDate.getTime();
-      const baseValidation = {
-        mode: record.networkState === 'OFFLINE' ? 'offline' : 'online',
-        scannedAt: record.scannedAt,
-        networkType: record.networkType,
-        ssid: record.ssid,
-        ipAddress,
-        networkState: record.networkState
-      };
-
-      if (Number.isNaN(scannedAtTime)) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Invalid scannedAt timestamp'
-        });
-        await logSubmission({
-          qrId,
-          officeId,
-          isValid: false,
-          failureReason: 'Invalid scannedAt timestamp',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['INVALID_SCANNED_AT']
-        });
-        continue;
-      }
-
-      if (scannedAtTime > Date.now()) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Scan time is in the future'
-        });
-        await logSubmission({
-          qrId,
-          officeId,
-          isValid: false,
-          failureReason: 'Scan time is in the future',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['FUTURE_SCAN_TIME']
-        });
-        continue;
-      }
-
-      if (exp && scannedAtTime > exp * 1000) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'QR token expired at scan time'
-        });
-        await logSubmission({
-          qrId,
-          officeId,
-          isValid: false,
-          failureReason: 'QR token expired at scan time',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['TOKEN_EXPIRED_AT_SCAN']
-        });
-        continue;
-      }
-
-      const [qrRecord] = await db
-        .select({
-          qr: qrCodes,
-          office: offices
-        })
-        .from(qrCodes)
-        .leftJoin(offices, eq(qrCodes.officeId, offices.id))
-        .where(eq(qrCodes.qrId, qrId))
-        .limit(1);
-
-      const qrCode = qrRecord?.qr || null;
-      const office = qrRecord?.office || null;
-
-      if (!qrCode || !office) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'QR code not found'
-        });
-        await logSubmission({
-          qrId,
-          officeId,
-          isValid: false,
-          failureReason: 'QR code not found',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['QR_NOT_FOUND']
-        });
-        continue;
-      }
-
-      if (String(office.id) !== String(officeId)) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'QR token office mismatch'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'QR token office mismatch',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['OFFICE_MISMATCH']
-        });
-        continue;
-      }
-
-      if (qrCode.isUsed) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'QR code already used'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'QR code already used',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['QR_REPLAY']
-        });
-        continue;
-      }
-
-      const officeAllowedSSIDHash = hashList(office.allowedSSIDs || []);
-      const officeAllowedIPRangeHash = hashList(office.allowedIPRanges || []);
-      if (officeAllowedSSIDHash !== allowedSSIDHash || officeAllowedIPRangeHash !== allowedIPRangeHash) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'QR token no longer matches office network policy'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'QR token no longer matches office network policy',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['POLICY_MISMATCH']
-        });
-        continue;
-      }
-
-      if (String(record.networkType).toLowerCase().includes('cellular') ||
-        ['2g', '3g', '4g', '5g', 'slow-2g'].includes(String(record.networkType).toLowerCase())) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Cellular network detected'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'Cellular network detected',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['CELLULAR_NETWORK']
-        });
-        continue;
-      }
-
-      const allowedRanges = office.allowedIPRanges || [];
-      if (!allowedRanges.length) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Office network is not configured (allowed IP ranges missing)'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'Office network is not configured (allowed IP ranges missing)',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['IP_POLICY_MISSING']
-        });
-        continue;
-      }
-
-      if (!isIpInRanges(ipAddress, allowedRanges)) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Not on corporate network'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'Not on corporate network',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['IP_MISMATCH']
-        });
-        continue;
-      }
-
-      const allowedSSIDs = office.allowedSSIDs || [];
-      if (record.ssid && allowedSSIDs.length && !allowedSSIDs.includes(record.ssid)) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Wi-Fi SSID mismatch'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'Wi-Fi SSID mismatch',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['SSID_MISMATCH']
-        });
-        continue;
-      }
-
-      const today = moment().startOf('day').toDate();
-      const todayEnd = moment(today).endOf('day').toDate();
-
-      const [existingAttendance] = await db
-        .select()
-        .from(attendance)
-        .where(
-          and(
-            eq(attendance.employeeId, userId),
-            gte(attendance.date, today),
-            sql`${attendance.date} <= ${todayEnd}`,
-            sql`${attendance.checkInTime} IS NOT NULL`
-          )
-        )
-        .limit(1);
-
-      if (existingAttendance) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Duplicate offline entry'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'Duplicate offline entry',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['DUPLICATE_ENTRY']
-        });
-        continue;
-      }
-
-      const [activeLeave] = await db
-        .select()
-        .from(leaves)
-        .where(
-          and(
-            eq(leaves.employeeId, userId),
-            eq(leaves.status, 'approved'),
-            sql`${leaves.startDate} <= ${todayEnd}`,
-            sql`${leaves.endDate} >= ${today}`
-          )
-        )
-        .limit(1);
-
-      if (activeLeave) {
-        results.push({
-          id: record.id,
-          token: record.token,
-          status: 'REJECTED',
-          reason: 'Employee is on approved leave'
-        });
-        await logSubmission({
-          qrId,
-          officeId: office.id,
-          isValid: false,
-          failureReason: 'Employee is on approved leave',
-          validationResult: {
-            ...baseValidation,
-            syncStatus: 'rejected'
-          },
-          suspiciousFlags: ['ON_LEAVE']
-        });
-        continue;
-      }
-
-      await db
-        .update(qrCodes)
-        .set({
-          isUsed: true,
-          usedAt: new Date(),
-          usedBy: userId
-        })
-        .where(eq(qrCodes.qrId, qrId));
-
-      await db
-        .insert(attendance)
-        .values({
-          employeeId: userId,
-          date: today,
-          checkInTime: scannedAtDate,
-          checkInLocation: `QR: ${office.name}`,
-          checkInIpAddress: ipAddress,
-          checkInDeviceInfo: userAgent,
-          status: 'present'
-        });
-
-      results.push({
-        id: record.id,
-        token: record.token,
-        status: 'FINAL',
-        reason: 'Accepted'
-      });
-
-      await logSubmission({
-        qrId,
-        officeId: office.id,
-        isValid: true,
-        failureReason: null,
-        validationResult: {
-          ...baseValidation,
-          syncStatus: 'final'
-        },
-        suspiciousFlags: []
-      });
-    }
+    const [record] = await db.insert(attendance).values({
+      employeeId: userId,
+      date: today,
+      checkInTime: new Date(),
+      checkInLocation: `Secure: ${matchedOffice.name} (${Math.round(minDistance)}m)`,
+      checkInIpAddress: ipAddress,
+      checkInDeviceInfo: userAgent,
+      status: 'present'
+    }).returning();
 
     res.json({
       success: true,
+      message: `Checked in at ${matchedOffice.name}`,
       data: {
-        results
+        attendance: record,
+        office: matchedOffice.name,
+        distance: Math.round(minDistance)
       }
     });
+
   } catch (error) {
-    console.error('Attendance submit error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error during attendance submit'
-    });
+    console.error('Secure Checkin Error:', error);
+    res.status(500).json({ success: false, message: 'Server Error' });
   }
-};
+});
 
-// @route   POST /api/attendance/submit
-// @desc    Unified attendance submission (online/offline)
-// @access  Private
-router.post('/submit', authenticate, handleAttendanceSubmit);
 
-// Backward compatibility (deprecated)
-router.post('/validate', authenticate, handleAttendanceSubmit);
-router.post('/sync', authenticate, handleAttendanceSubmit);
 
 // @route   GET /api/attendance
 // @desc    Get attendance records

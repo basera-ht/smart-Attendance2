@@ -2,21 +2,20 @@
 import Link from 'next/link'
 import { useRouter } from 'next/router'
 import { useAuth } from '../hooks/useAuth'
-import { 
-  LayoutDashboard, 
-  Clock, 
-  Users, 
-  BarChart3, 
+import {
+  LayoutDashboard,
+  Clock,
+  Users,
+  BarChart3,
   User,
   Calendar,
   CalendarDays,
-  QrCode,
-  ScanLine,
+
   Building2,
   X
 } from 'lucide-react'
 
-const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
+const Sidebar = ({ isOpen = false, onClose = () => { } }) => {
   const router = useRouter()
   const { user, hasRole } = useAuth()
 
@@ -69,35 +68,17 @@ const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
       icon: User,
       roles: ['admin', 'hr', 'employee']
     },
-    {
-      name: 'QR Admin',
-      href: '/dashboard/qr-admin',
-      icon: QrCode,
-      roles: ['admin', 'hr']
-    },
-    {
-      name: 'Scan QR',
-      href: '/attendance/scan',
-      icon: ScanLine,
-      roles: ['admin', 'hr', 'employee']
-    },
-    {
-      name: 'Show QR',
-      href: '/attendance/qr',
-      icon: QrCode,
-      roles: ['admin', 'hr', 'employee']
-    },
+
   ]
 
-  const filteredMenuItems = menuItems.filter(item => 
+  const filteredMenuItems = menuItems.filter(item =>
     item.roles.includes(user?.role)
   )
 
   return (
     <div
-      className={`fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-lg transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 ${
-        isOpen ? 'translate-x-0' : '-translate-x-full'
-      }`}
+      className={`fixed inset-y-0 left-0 z-40 w-64 bg-white shadow-lg transform transition-transform duration-200 ease-in-out md:static md:translate-x-0 ${isOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
     >
       <div className="p-4 h-full overflow-y-auto">
         <div className="flex items-center justify-between mb-4 md:hidden">
@@ -121,11 +102,10 @@ const Sidebar = ({ isOpen = false, onClose = () => {} }) => {
                 key={item.name}
                 href={item.href}
                 onClick={onClose}
-                className={`flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors ${
-                  isActive
+                className={`flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors ${isActive
                     ? 'bg-blue-50 text-blue-700 border border-blue-200'
                     : 'text-gray-700 hover:bg-gray-100'
-                }`}
+                  }`}
               >
                 <Icon size={18} className="mr-3" />
                 {item.name}

@@ -146,10 +146,9 @@ export const authAPI = {
 // Attendance API
 export const attendanceAPI = {
   checkIn: (data) => api.post('/attendance/checkin', data),
+  checkInSecure: (data) => api.post('/attendance/checkin-secure', data),
   checkOut: (data) => api.post('/attendance/checkout', data),
-  validate: (data) => api.post('/attendance/validate', data),
-  sync: (data) => api.post('/attendance/sync', data),
-  submit: (data) => api.post('/attendance/submit', data),
+
   getAttendance: (params) => api.get('/attendance', { params }),
   getEmployeeAttendance: (employeeId, params) => api.get(`/attendance/employee/${employeeId}`, { params }),
   updateAttendance: (id, data) => api.put(`/attendance/${id}`, data),
@@ -210,18 +209,7 @@ export const holidaysAPI = {
   updateSelectedHolidays: (holidayIds, year) => api.put('/holidays/selected', { holidayIds, year }),
 }
 
-// QR API
-export const qrAPI = {
-  generate: (data) => api.post('/qr/generate', data),
-  getActive: (params) => api.get('/qr/active', { params }),
-  getActivePublic: (params) => api.get('/qr/active-public', { params }),
-  getActiveRotating: (params) => api.get('/qr/active-rotating', { params }),
-  validate: (data) => api.post('/qr/validate', data),
-  validateSecure: (data) => api.post('/qr/validate-secure', data),
-  getPublicKey: () => api.get('/qr/public-key'),
-  getPayload: (qrId) => api.get(`/qr/payload/${qrId}`),
-  getValidationLogs: (params) => api.get('/qr/validation-logs', { params }),
-}
+
 
 // Offices API
 export const officesAPI = {

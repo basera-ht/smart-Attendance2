@@ -12,7 +12,6 @@ import reportRoutes from './src/routes/reportRoutes.js';
 import taskRoutes from './src/routes/taskRoutes.js';
 import leaveRoutes from './src/routes/leaveRoutes.js';
 import holidayRoutes from './src/routes/holidayRoutes.js';
-import qrRoutes from './src/routes/qrRoutes.js';
 import officeRoutes from './src/routes/officeRoutes.js';
 import { errorHandler } from './src/middleware/errorMiddleware.js';
 
@@ -184,7 +183,6 @@ app.use('/api/analytics', reportRoutes); // Alias for analytics endpoints
 app.use('/api/tasks', taskRoutes);
 app.use('/api/leaves', leaveRoutes);
 app.use('/api/holidays', holidayRoutes);
-app.use('/api/qr', qrRoutes);
 app.use('/api/offices', officeRoutes);
 
 // Health check endpoint

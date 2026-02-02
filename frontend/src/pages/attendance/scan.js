@@ -1,606 +1,138 @@
 'use client'
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
-import jsQR from 'jsqr'
-import { attendanceAPI, qrAPI } from '../../services/api'
+import { attendanceAPI } from '../../services/api'
 import { useAuth } from '../../hooks/useAuth'
-import { Camera, AlertCircle, CheckCircle, Loader, Upload, WifiOff, Zap, ZapOff, RefreshCcw } from 'lucide-react'
-import { getCachedKey, setCachedKey } from '../../utils/keyCache'
-import { saveAttendanceAttempt, listQueuedRecords, updateQueueRecord } from '../../utils/offlineQueue'
+import { MapPin, CheckCircle, AlertCircle, Loader2, ShieldCheck, RefreshCw, Lock } from 'lucide-react'
 
-export default function QRScanPage() {
+export default function SecureCheckInPage() {
   const router = useRouter()
-  const { isAuthenticated } = useAuth()
-  const videoRef = useRef(null)
-  const canvasRef = useRef(null)
-  const streamRef = useRef(null)
-  const fileInputRef = useRef(null)
-
-  const [scanning, setScanning] = useState(false)
-  const [qrData, setQrData] = useState(null)
-  const [processing, setProcessing] = useState(false)
-  const [result, setResult] = useState(null)
-  const [error, setError] = useState(null)
-  const [cameraError, setCameraError] = useState(null)
-  const [fileError, setFileError] = useState(null)
-  const [ssid, setSsid] = useState('')
-  const [networkInfo, setNetworkInfo] = useState({ networkType: 'unknown', isCellular: false })
-  const [syncNotice, setSyncNotice] = useState(null)
-  const [canUseCamera, setCanUseCamera] = useState(false)
-  const [torchOn, setTorchOn] = useState(false)
-  const [hasTorch, setHasTorch] = useState(false)
+  const { isAuthenticated, user } = useAuth()
+  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState('idle') // idle, locating, verifying, success, error
+  const [message, setMessage] = useState('')
+  const [distance, setDistance] = useState(null)
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      router.push('/login')
-    }
+    if (!isAuthenticated) router.push('/login')
   }, [isAuthenticated, router])
 
-  useEffect(() => {
-    const info = getNetworkInfo()
-    setNetworkInfo(info)
-  }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const available = !!navigator?.mediaDevices?.getUserMedia
-    setCanUseCamera(available)
-    if (!available) {
-      setCameraError('Camera requires HTTPS (or localhost) on mobile browsers.')
-    } else {
-      // Auto-start camera if available
-      startCamera()
-    }
-  }, [])
-
-  useEffect(() => {
-    const refreshQueueStatus = async () => {
-      try {
-        const records = await listQueuedRecords()
-        const rejected = records.filter((record) => record.status === 'REJECTED')
-        if (rejected.length > 0) {
-          setSyncNotice('Some offline scans were rejected during sync. Please contact admin.')
-        }
-      } catch (err) {
-        console.error('Failed to load offline queue status:', err)
-      }
-    }
-
-    refreshQueueStatus()
-    const handleOnline = () => refreshQueueStatus()
-    window.addEventListener('online', handleOnline)
-    return () => window.removeEventListener('online', handleOnline)
-  }, [])
-
-  const decodeQRPayload = (encodedPayload) => {
+  const handleCheckIn = async () => {
     try {
-      // Try parsing as JSON first (legacy support)
-      return JSON.parse(encodedPayload)
-    } catch (err) {
-      // If not JSON, it's a raw token string (new format)
-      return encodedPayload
-    }
-  }
+      setStatus('locating')
+      setLoading(true)
+      setMessage('Acquiring precise location...')
 
-  const base64UrlToUint8Array = (value) => {
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-    const binary = atob(padded);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-  };
-
-  const parseJwt = (token) => {
-    const parts = token.split('.');
-    if (parts.length !== 3) {
-      throw new Error('Invalid JWT structure');
-    }
-    const [headerB64, payloadB64, signatureB64] = parts;
-    const header = JSON.parse(new TextDecoder().decode(base64UrlToUint8Array(headerB64)));
-    const payload = JSON.parse(new TextDecoder().decode(base64UrlToUint8Array(payloadB64)));
-    return { header, payload, signatureB64, signingInput: `${headerB64}.${payloadB64}` };
-  };
-
-  const importPublicKey = async (pem) => {
-    const cleaned = pem
-      .replace(/-----BEGIN PUBLIC KEY-----/g, '')
-      .replace(/-----END PUBLIC KEY-----/g, '')
-      .replace(/\s/g, '');
-    const binary = atob(cleaned);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return window.crypto.subtle.importKey(
-      'spki',
-      bytes.buffer,
-      { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-      false,
-      ['verify']
-    );
-  };
-
-  const verifyJwt = async (token, publicKeyPem) => {
-    const { signatureB64, signingInput } = parseJwt(token);
-    const key = await importPublicKey(publicKeyPem);
-    const signature = base64UrlToUint8Array(signatureB64);
-    const data = new TextEncoder().encode(signingInput);
-    return window.crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, signature, data);
-  };
-
-  const getPublicKey = async (keyId) => {
-    const cached = keyId ? await getCachedKey(keyId) : null;
-    if (cached?.publicKey) {
-      return cached.publicKey;
-    }
-    const response = await qrAPI.getPublicKey();
-    if (!response.data?.success) {
-      throw new Error(response.data?.message || 'Unable to fetch public key');
-    }
-    const { keyId: serverKeyId, publicKey } = response.data.data;
-    await setCachedKey({ keyId: serverKeyId, publicKey });
-    return publicKey;
-  };
-
-  const getNetworkInfo = () => {
-    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {}
-    const type = connection.type || connection.effectiveType || 'unknown'
-    const normalized = String(type).toLowerCase()
-    const isCellular = normalized === 'cellular' || ['2g', '3g', '4g', '5g', 'slow-2g'].includes(normalized)
-    return { networkType: normalized || 'unknown', isCellular }
-  }
-
-  const startCamera = async () => {
-    try {
-      setCameraError(null)
-      setResult(null)
-      if (typeof window === 'undefined' || !navigator?.mediaDevices?.getUserMedia) {
-        setCameraError('Camera access is not available here. Use HTTPS (or localhost) on a supported device.')
-        setScanning(false)
-        return
+      // 1. Get GPS
+      if (!navigator.geolocation) {
+        throw new Error("Geolocation is not supported by this browser.")
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: 'environment',
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      })
-      streamRef.current = stream
 
-      // Check for torch support
-      const track = stream.getVideoTracks()[0]
-      const capabilities = track.getCapabilities?.() || {}
-      setHasTorch(!!capabilities.torch)
-
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-        setScanning(true)
-      }
-    } catch (err) {
-      console.error('Camera error:', err)
-      setCameraError('Failed to access camera. Please allow camera permissions.')
-      setScanning(false)
-    }
-  }
-
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-    }
-    setScanning(false)
-    setTorchOn(false)
-  }
-
-  const toggleTorch = async () => {
-    if (!streamRef.current) return
-    const track = streamRef.current.getVideoTracks()[0]
-    try {
-      await track.applyConstraints({
-        advanced: [{ torch: !torchOn }]
-      })
-      setTorchOn(!torchOn)
-    } catch (err) {
-      console.error('Failed to toggle torch:', err)
-    }
-  }
-
-  const scanQR = () => {
-    if (!scanning || !videoRef.current || !canvasRef.current) return
-
-    const video = videoRef.current
-    const canvas = canvasRef.current
-    const ctx = canvas.getContext('2d')
-
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
-
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      const code = jsQR(imageData.data, imageData.width, imageData.height)
-
-      if (code && code.data) {
+      navigator.geolocation.getCurrentPosition(async (pos) => {
         try {
-          const decoded = decodeQRPayload(code.data)
-          // Vibration feedback
-          if ('vibrate' in navigator) {
-            navigator.vibrate(100)
+          setStatus('verifying')
+          setMessage('Verifying Security Tokens...')
+
+          const { latitude, longitude, accuracy } = pos.coords
+          const timestamp = pos.timestamp
+
+          // Validate Accuracy locally (Warn if > 50m, but let server decide strictness)
+          if (accuracy > 100) {
+            console.warn("Low GPS Accuracy:", accuracy);
+            // We continue, but server might reject if out of bounds
           }
-          setQrData(decoded)
-          stopCamera()
-          handleQRDetected(decoded)
-        } catch (err) {
-          console.error('QR decode error:', err)
-          setError('Invalid QR code format')
-        }
-      }
-    }
 
-    if (scanning) {
-      requestAnimationFrame(scanQR)
-    }
-  }
+          const response = await attendanceAPI.checkInSecure({
+            latitude,
+            longitude,
+            accuracy,
+            timestamp
+          })
 
-  const handleFileSelect = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setFileError('Please select an image file')
-      return
-    }
-
-    setFileError(null)
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const img = new Image()
-      img.onload = () => {
-        const canvas = canvasRef.current
-        if (!canvas) return
-        const ctx = canvas.getContext('2d')
-        canvas.width = img.width
-        canvas.height = img.height
-        ctx.drawImage(img, 0, 0)
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-        const code = jsQR(imageData.data, imageData.width, imageData.height)
-        if (code?.data) {
-          try {
-            const decoded = decodeQRPayload(code.data)
-            if ('vibrate' in navigator) {
-              navigator.vibrate(100)
-            }
-            setQrData(decoded)
-            handleQRDetected(decoded)
-          } catch (err) {
-            setFileError('Invalid QR image')
+          if (response.data?.success) {
+            setStatus('success')
+            setMessage(response.data.message || 'Check-in Successful')
+            setDistance(response.data.data?.distance)
+            if ('vibrate' in navigator) navigator.vibrate([100, 50, 100])
+          } else {
+            throw new Error(response.data?.message || 'Check-in failed')
           }
-        } else {
-          setFileError('No QR code found in image')
-        }
-      }
-      img.onerror = () => {
-        setFileError('Failed to load image')
-      }
-      img.src = event.target.result
-    }
-    reader.readAsDataURL(file)
-  }
-
-  const handleQRDetected = async (decodedQR) => {
-    try {
-      setProcessing(true)
-      setError(null)
-      setResult(null)
-
-      let token;
-      try {
-        const decoded = JSON.parse(decodedQR)
-        token = decoded.token || decodedQR
-      } catch (e) {
-        token = decodedQR
-      }
-
-      if (!token) {
-        setError('Invalid QR code payload')
-        setProcessing(false)
-        return
-      }
-
-      // NEXT GEN STEP: Get Location
-      const getLocationFn = () => {
-        return new Promise((resolve, reject) => {
-          if (!navigator.geolocation) {
-            reject(new Error("Geolocation not supported"))
-          }
-          navigator.geolocation.getCurrentPosition(
-            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-            (err) => reject(err),
-            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-          )
-        })
-      }
-
-      let location = { lat: 0, lng: 0 };
-      try {
-        location = await getLocationFn();
-      } catch (locErr) {
-        console.error("Location Error:", locErr);
-        // Only strict on production/secure mode?
-        // We will try sending 0,0 - server implies strict check, so it might fail if office has GPS.
-        // Or we alert user.
-        setError("Location access required for secure check-in. Please enable GPS.");
-        setProcessing(false)
-        return;
-      }
-
-      const isOnline = navigator.onLine
-      const authToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-      const info = getNetworkInfo()
-      setNetworkInfo(info)
-
-      // Save Local Attempt first (Queue)
-      const attempt = await saveAttendanceAttempt({
-        token,
-        scannedAt: new Date().toISOString(),
-        networkState: isOnline ? 'ONLINE' : 'OFFLINE',
-        networkType: info.networkType,
-        ssid: ssid.trim() || null,
-        status: 'PENDING',
-        syncAttempts: 0,
-        authHeader: authToken ? `Bearer ${authToken}` : null,
-        latitude: location.lat,
-        longitude: location.lng,
-      })
-
-      if (!isOnline) {
-        setResult({ status: 'PENDING' })
-        setProcessing(false)
-        return
-      }
-
-      // Call Secure Endpoint
-      const response = await qrAPI.validateSecure({
-        token,
-        latitude: location.lat,
-        longitude: location.lng,
-        networkType: info.networkType,
-        ssid: ssid.trim() || null
-      })
-
-      if (response.data?.success) {
-        // Success
-        await updateQueueRecord({ ...attempt, status: 'FINAL' })
-
-        let msg = "Attendance Recorded"
-        if (response.data.data?.distance) {
-          msg += ` (${response.data.data.distance}m away)`
+        } catch (apiErr) {
+          console.error(apiErr)
+          setStatus('error')
+          setMessage(apiErr.response?.data?.message || apiErr.message || "Server Verification Failed")
+        } finally {
+          setLoading(false)
         }
 
-        setResult({ status: 'FINAL', message: msg })
-
-        if ('vibrate' in navigator) navigator.vibrate([100, 50, 100])
-      } else {
-        // Rejected
-        await updateQueueRecord({ ...attempt, status: 'REJECTED' })
-        setError(response.data?.message || 'Check-in Failed')
-      }
+      }, (geoErr) => {
+        console.error(geoErr)
+        setStatus('error')
+        setMessage("Location Access Denied. Please enable GPS to check in.")
+        setLoading(false)
+      }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 })
 
     } catch (err) {
-      console.error('QR validation error:', err)
-      const message = err.response?.data?.message || 'Secure Validation Failed'
-      setError(message)
-    } finally {
-      setProcessing(false)
+      setStatus('error')
+      setMessage(err.message)
+      setLoading(false)
     }
   }
-
-  useEffect(() => {
-    if (scanning) {
-      scanQR()
-    }
-  }, [scanning])
-
-  useEffect(() => {
-    return () => stopCamera()
-  }, [])
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
-      <div className="w-full max-w-md space-y-6">
-        {/* Header Section */}
-        <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold text-white tracking-tight">Scanner</h1>
-          <p className="text-slate-400 text-sm">Align QR code within the frame</p>
+    <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-6">
+      <div className="w-full max-w-sm bg-slate-800/50 backdrop-blur-xl border border-slate-700/50 rounded-3xl p-8 flex flex-col items-center text-center shadow-2xl">
+
+        <div className="mb-6 p-4 bg-blue-500/10 rounded-full">
+          <Lock className="w-12 h-12 text-blue-500" />
         </div>
 
-        {/* Camera/Scanner Container */}
-        <div className="relative aspect-square w-full max-w-sm mx-auto bg-black rounded-3xl overflow-hidden shadow-2xl border-2 border-slate-800">
-          <video
-            ref={videoRef}
-            className="w-full h-full object-cover"
-            playsInline
-            muted
-          />
-          <canvas ref={canvasRef} className="hidden" />
+        <h1 className="text-2xl font-bold text-white mb-2">Secure Check-In</h1>
+        <p className="text-slate-400 text-sm mb-8">
+          Requires Office Wi-Fi & GPS within 50m.
+        </p>
 
-          {/* Scanner Overlay */}
-          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            {/* Dark Mask */}
-            <div className="absolute inset-0 bg-black/40" />
-
-            {/* Scanning Window */}
-            <div className="relative w-64 h-64 border-2 border-white/30 rounded-3xl overflow-hidden shadow-[0_0_0_1000px_rgba(0,0,0,0.5)]">
-              {/* Corner Indicators */}
-              <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-blue-500 rounded-tl-xl" />
-              <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-blue-500 rounded-tr-xl" />
-              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-blue-500 rounded-bl-xl" />
-              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-blue-500 rounded-br-xl" />
-
-              {/* Scanning Line Animation */}
-              {scanning && (
-                <div className="absolute top-0 left-0 w-full h-1 bg-blue-500/80 shadow-[0_0_15px_blue] animate-[scan_2s_linear_infinite]" />
-              )}
-            </div>
-
-            {/* Flash/Torch Toggle */}
-            {hasTorch && scanning && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggleTorch();
-                }}
-                className="absolute bottom-8 p-4 bg-white/10 backdrop-blur-md rounded-full text-white pointer-events-auto hover:bg-white/20 transition-colors"
-                title="Toggle Flashlight"
-              >
-                {torchOn ? <ZapOff className="w-6 h-6" /> : <Zap className="w-6 h-6" />}
-              </button>
-            )}
-          </div>
-
-          {/* No Camera Prompt */}
-          {!scanning && !processing && !result && !error && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 text-center p-6 space-y-4">
-              <Camera className="w-12 h-12 text-slate-500" />
-              <div className="space-y-1">
-                <p className="text-white font-medium">Ready to scan?</p>
-                <p className="text-slate-400 text-sm">Start your camera to begin validation</p>
-              </div>
-              <button
-                onClick={startCamera}
-                disabled={!canUseCamera}
-                className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 text-white px-6 py-2.5 rounded-full font-semibold transition-all shadow-lg"
-              >
-                Start Camera
-              </button>
-            </div>
-          )}
-
-          {/* Processing State */}
-          {processing && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-blue-600/90 text-center p-6 space-y-4 z-10 animate-in fade-in zoom-in duration-300">
-              <Loader className="w-12 h-12 text-white animate-spin" />
-              <p className="text-white font-semibold text-lg">Validating...</p>
-            </div>
-          )}
-
-          {/* Success Result */}
-          {result?.status === 'FINAL' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-emerald-600 text-center p-6 space-y-4 z-20 animate-in zoom-in slide-in-from-bottom duration-500">
-              <div className="bg-white/20 p-4 rounded-full">
-                <CheckCircle className="w-16 h-16 text-white" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-white text-2xl font-bold">Authenticated!</p>
-                <p className="text-emerald-100 italic">{result?.message || 'Attendance recorded successfully'}</p>
-              </div>
-              <button
-                onClick={() => { setResult(null); startCamera(); }}
-                className="mt-4 bg-white text-emerald-700 px-6 py-2 rounded-full font-bold shadow-lg"
-              >
-                Done
-              </button>
-            </div>
-          )}
-
-          {/* Pending/Offline Result */}
-          {result?.status === 'PENDING' && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-amber-500 text-center p-6 space-y-4 z-20 animate-in zoom-in duration-500">
-              <div className="bg-white/20 p-4 rounded-full">
-                <WifiOff className="w-16 h-16 text-white" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-white text-2xl font-bold">Saved Offline</p>
-                <p className="text-amber-100">Will sync automatically once online</p>
-              </div>
-              <button
-                onClick={() => { setResult(null); startCamera(); }}
-                className="mt-4 bg-white text-amber-700 px-6 py-2 rounded-full font-bold shadow-lg"
-              >
-                Continue
-              </button>
-            </div>
-          )}
-
-          {/* Error State */}
-          {(error || cameraError || fileError) && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-rose-600 text-center p-6 space-y-4 z-20 animate-in zoom-in duration-500">
-              <div className="bg-white/20 p-4 rounded-full">
-                <AlertCircle className="w-16 h-16 text-white" />
-              </div>
-              <div className="space-y-1 px-4">
-                <p className="text-white text-xl font-bold">Validation Error</p>
-                <p className="text-rose-100 text-sm line-clamp-3">{error || cameraError || fileError}</p>
-              </div>
-              <button
-                onClick={() => { setError(null); setFileError(null); setCameraError(null); startCamera(); }}
-                className="mt-4 bg-white text-rose-700 px-8 py-2.5 rounded-full font-bold shadow-lg flex items-center gap-2"
-              >
-                <RefreshCcw className="w-4 h-4" />
-                Try Again
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* Action Buttons Section */}
-        <div className="grid grid-cols-2 gap-3">
+        {status === 'idle' || status === 'error' ? (
           <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 py-3 rounded-2xl font-medium transition-colors"
+            onClick={handleCheckIn}
+            disabled={loading}
+            className="group relative w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-4 rounded-2xl transition-all active:scale-95 shadow-lg shadow-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Upload className="w-4 h-4" />
-            Upload Image
+            <span className="flex items-center justify-center gap-2 text-lg">
+              {status === 'error' ? <RefreshCw className="w-5 h-5" /> : <ShieldCheck className="w-5 h-5" />}
+              {status === 'error' ? 'Retry Check-In' : 'Start Check-In'}
+            </span>
           </button>
-
-          <div className="flex flex-col">
-            <input
-              type="text"
-              value={ssid}
-              onChange={(e) => setSsid(e.target.value)}
-              className="w-full bg-slate-800 border-none text-white text-sm px-4 py-3 rounded-2xl focus:ring-2 focus:ring-blue-500 transition-all placeholder:text-slate-500"
-              placeholder="Office WiFi (Optional)"
-            />
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-        </div>
-
-        {/* Sync/Notice Banner */}
-        {syncNotice && (
-          <div className="bg-orange-500/10 border border-orange-500/20 text-orange-400 px-4 py-3 rounded-2xl flex items-center gap-3 text-sm animate-pulse">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <p>{syncNotice}</p>
+        ) : (
+          <div className="w-full py-4 rounded-2xl bg-slate-900/50 border border-slate-700 flex flex-col items-center justify-center gap-3">
+            {status === 'success' ? (
+              <CheckCircle className="w-10 h-10 text-emerald-500 animate-in zoom-in duration-300" />
+            ) : (
+              <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
+            )}
+            <span className={`font-medium ${status === 'success' ? 'text-emerald-400' : 'text-blue-400'}`}>
+              {message}
+            </span>
+            {distance !== null && <span className="text-xs text-slate-500">Distance: {distance}m</span>}
           </div>
         )}
 
-        {/* Network Info Footer */}
-        <div className="flex items-center justify-center gap-2 text-xs text-slate-500 font-medium tracking-wide uppercase">
-          <div className={`w-2 h-2 rounded-full ${networkInfo.isCellular ? 'bg-orange-500' : 'bg-emerald-500'}`} />
-          {networkInfo.networkType} Network
-        </div>
-      </div>
+        {status === 'error' && (
+          <div className="mt-6 flex items-start gap-3 text-left bg-rose-500/10 border border-rose-500/20 p-4 rounded-xl">
+            <AlertCircle className="w-5 h-5 text-rose-500 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-rose-200 text-sm font-medium">{message}</p>
+              <p className="text-rose-400/60 text-xs text-center mt-2">Common Fixes: Connect to Office Wi-Fi • Move closer to entry • Enable Precise Location</p>
+            </div>
+          </div>
+        )}
 
-      <style jsx global>{`
-        @keyframes scan {
-          0% { transform: translateY(0); opacity: 0; }
-          10% { opacity: 1; }
-          90% { opacity: 1; }
-          100% { transform: translateY(256px); opacity: 0; }
-        }
-      `}</style>
+        <div className="mt-8 flex items-center justify-center gap-4 text-[10px] text-slate-600 uppercase tracking-widest font-semibold">
+          <span className="flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> Anti-Spoofing</span>
+          <span className="flex items-center gap-1"><MapPin className="w-3 h-3" /> Geofence</span>
+        </div>
+
+      </div>
     </div>
   )
 }

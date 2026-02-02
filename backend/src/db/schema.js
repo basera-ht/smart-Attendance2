@@ -226,52 +226,8 @@ export const geofences = smartAttendance.table('geofences', {
   isActiveIdx: index('geofences_is_active_idx').on(table.isActive),
 }));
 
-// QR Codes table
-export const qrCodes = smartAttendance.table('qr_codes', {
-  id: serial('id').primaryKey(),
-  qrId: varchar('qr_id', { length: 255 }).notNull().unique(), // UUID
-  officeId: integer('office_id').notNull().references(() => offices.id, { onDelete: 'cascade' }),
-  geofenceId: integer('geofence_id').references(() => geofences.id, { onDelete: 'cascade' }),
-  payload: jsonb('payload').notNull(), // Encoded QR payload
-  expiresAt: timestamp('expires_at').notNull(),
-  isUsed: boolean('is_used').notNull().default(false),
-  usedAt: timestamp('used_at'),
-  usedBy: integer('used_by').references(() => users.id),
-  nonce: varchar('nonce', { length: 255 }).notNull(), // Replay attack prevention
-  createdById: integer('created_by_id').notNull().references(() => users.id),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-}, (table) => ({
-  qrIdIdx: index('qr_codes_qr_id_idx').on(table.qrId),
-  officeIdIdx: index('qr_codes_office_id_idx').on(table.officeId),
-  expiresAtIdx: index('qr_codes_expires_at_idx').on(table.expiresAt),
-  isUsedIdx: index('qr_codes_is_used_idx').on(table.isUsed),
-  nonceIdx: index('qr_codes_nonce_idx').on(table.nonce),
-}));
+// QR Codes table and logs removed
 
-// QR Validation Audit Log (for security monitoring)
-export const qrValidationLogs = smartAttendance.table('qr_validation_logs', {
-  id: serial('id').primaryKey(),
-  qrId: varchar('qr_id', { length: 255 }),
-  userId: integer('user_id').references(() => users.id),
-  officeId: integer('office_id').references(() => offices.id),
-  isValid: boolean('is_valid').notNull(),
-  validationResult: jsonb('validation_result').notNull(), // Detailed validation results
-  gpsLat: varchar('gps_lat', { length: 50 }),
-  gpsLng: varchar('gps_lng', { length: 50 }),
-  gpsAccuracy: integer('gps_accuracy'), // in meters
-  ipAddress: varchar('ip_address', { length: 45 }),
-  userAgent: text('user_agent'),
-  failureReason: text('failure_reason'),
-  isSuspicious: boolean('is_suspicious').notNull().default(false),
-  suspiciousFlags: jsonb('suspicious_flags').default([]), // Array of flags
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-}, (table) => ({
-  qrIdIdx: index('qr_validation_logs_qr_id_idx').on(table.qrId),
-  userIdIdx: index('qr_validation_logs_user_id_idx').on(table.userId),
-  isValidIdx: index('qr_validation_logs_is_valid_idx').on(table.isValid),
-  isSuspiciousIdx: index('qr_validation_logs_is_suspicious_idx').on(table.isSuspicious),
-  createdAtIdx: index('qr_validation_logs_created_at_idx').on(table.createdAt),
-}));
 
 // Relations for new tables
 export const officesRelations = relations(smartAttendance.offices, ({ one, many }) => ({
@@ -280,7 +236,6 @@ export const officesRelations = relations(smartAttendance.offices, ({ one, many 
     references: [users.id],
   }),
   geofences: many(geofences),
-  qrCodes: many(qrCodes),
 }));
 
 export const geofencesRelations = relations(smartAttendance.geofences, ({ one, many }) => ({
@@ -292,36 +247,7 @@ export const geofencesRelations = relations(smartAttendance.geofences, ({ one, m
     fields: [geofences.createdById],
     references: [users.id],
   }),
-  qrCodes: many(qrCodes),
 }));
 
-export const qrCodesRelations = relations(smartAttendance.qrCodes, ({ one }) => ({
-  office: one(offices, {
-    fields: [qrCodes.officeId],
-    references: [offices.id],
-  }),
-  geofence: one(geofences, {
-    fields: [qrCodes.geofenceId],
-    references: [geofences.id],
-  }),
-  createdBy: one(users, {
-    fields: [qrCodes.createdById],
-    references: [users.id],
-  }),
-  usedByUser: one(users, {
-    fields: [qrCodes.usedBy],
-    references: [users.id],
-  }),
-}));
 
-export const qrValidationLogsRelations = relations(smartAttendance.qrValidationLogs, ({ one }) => ({
-  user: one(users, {
-    fields: [qrValidationLogs.userId],
-    references: [users.id],
-  }),
-  office: one(offices, {
-    fields: [qrValidationLogs.officeId],
-    references: [offices.id],
-  }),
-}));
 

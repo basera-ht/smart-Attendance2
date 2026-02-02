@@ -3,7 +3,7 @@ import { body, validationResult } from 'express-validator';
 import { eq, and, or, like, sql, desc, inArray } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { getDB } from '../config/db.js';
-import { geofences, offices, qrCodes, qrValidationLogs, users } from '../db/schema.js';
+import { geofences, offices, users } from '../db/schema.js';
 import { authenticate, authorize } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
@@ -16,7 +16,7 @@ router.get('/', authenticate, authorize('admin', 'hr'), async (req, res) => {
     const db = getDB();
     const { page = 1, limit = 10, search, department, role, isActive } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
+
     let conditions = [];
 
     // Search filter
@@ -243,14 +243,14 @@ router.post('/', authenticate, authorize('admin', 'hr'), [
     });
   } catch (error) {
     console.error('Employee creation error:', error);
-    
+
     if (error.code === '23505') {
       return res.status(400).json({
         success: false,
         message: 'Employee with this email or employee ID already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error during employee creation'
@@ -332,14 +332,14 @@ router.put('/:id', authenticate, authorize('admin', 'hr'), [
     });
   } catch (error) {
     console.error('Employee update error:', error);
-    
+
     if (error.code === '23505') {
       return res.status(400).json({
         success: false,
         message: 'Email or employee ID already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error during employee update'
@@ -376,32 +376,10 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
 
     // Permanent deletion
     if (permanent === 'true') {
-      const [qrCodeCountResult] = await db
-        .select({ count: sql`count(*)` })
-        .from(qrCodes)
-        .where(eq(qrCodes.createdById, id));
-      const qrCodeCount = Number(qrCodeCountResult?.count || 0);
-      if (qrCodeCount > 0) {
-        return res.status(409).json({
-          success: false,
-          message: 'Cannot permanently delete employee who created QR codes. Reassign or delete those QR codes first.'
-        });
-      }
-
-      await db
-        .update(offices)
-        .set({ createdById: null })
-        .where(eq(offices.createdById, id));
-
       await db
         .update(geofences)
         .set({ createdById: null })
         .where(eq(geofences.createdById, id));
-
-      await db
-        .update(qrValidationLogs)
-        .set({ userId: null })
-        .where(eq(qrValidationLogs.userId, id));
 
       // Delete the employee permanently from database
       await db
@@ -463,7 +441,7 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
 router.get('/stats/overview', authenticate, authorize('admin', 'hr'), async (req, res) => {
   try {
     const db = getDB();
-    
+
     // Get total active employees
     const totalResult = await db
       .select({ count: sql`count(*)` })
