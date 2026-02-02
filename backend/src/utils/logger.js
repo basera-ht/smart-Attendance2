@@ -20,12 +20,29 @@ const __dirname = path.dirname(__filename);
 
 // Ensure logs directory exists (only in development or non-serverless)
 const logsDir = path.join(__dirname, '../../logs');
+
 // In Vercel/Serverless, we typically can't write to local fs (except /tmp), 
 // and we should rely on stdout (console) which Vercel captures.
-const isServerless = process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME;
+// We also detect if we are in a read-only path structure like /var/task
+const isServerless = process.env.VERCEL ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  (process.env.NODE_ENV === 'production');
 
-if (!isServerless && !fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir, { recursive: true });
+let canWriteToDisk = !isServerless;
+
+if (canWriteToDisk) {
+  try {
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+    // Test write permission
+    const testFile = path.join(logsDir, '.test');
+    fs.writeFileSync(testFile, 'test');
+    fs.unlinkSync(testFile);
+  } catch (error) {
+    console.warn('⚠️ Cannot write to logs directory, disabling file logging:', error.message);
+    canWriteToDisk = false;
+  }
 }
 
 // Determine environment
@@ -74,7 +91,7 @@ const consoleTransport = new winston.transports.Console({
 const transports = [consoleTransport];
 
 // Only add file transports if we are allowed to write to disk
-if (!isServerless) {
+if (canWriteToDisk) {
   // Daily rotate file transport for combined logs
   const combinedFileTransport = new DailyRotateFile({
     filename: path.join(logsDir, 'combined-%DATE%.log'),
@@ -112,7 +129,7 @@ const logger = winston.createLogger({
   exitOnError: false,
 });
 
-if (!isServerless) {
+if (canWriteToDisk) {
   logger.exceptions.handle(
     new DailyRotateFile({
       filename: path.join(logsDir, 'exceptions-%DATE%.log'),
