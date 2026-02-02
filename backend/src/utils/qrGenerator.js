@@ -49,7 +49,7 @@ export const decodeQRPayload = (encodedPayload) => {
 export const generateQRCodeImage = async (payload) => {
   try {
     const dataUrl = await QRCode.toDataURL(payload, {
-      errorCorrectionLevel: 'L', // Keep 'L'. This creates the least dense/simplest grid.
+      errorCorrectionLevel: 'Q', // Increased to 'Q' (25%) to allow for Logo Overlay
       type: 'image/png',
       margin: 1,                 // Reduced from 2 to 1 for a tighter, cleaner look.
       width: 500,                // Increased to 500 for better resolution on high-density screens.
