@@ -52,9 +52,9 @@ export const generateQRCodeImage = async (payload) => {
       errorCorrectionLevel: 'L', // Keep 'L'. This creates the least dense/simplest grid.
       type: 'image/png',
       margin: 1,                 // Reduced from 2 to 1 for a tighter, cleaner look.
-      width: 200,                // Reduced from 400 to 200 for a smaller image size.
+      width: 500,                // Increased to 500 for better resolution on high-density screens.
       color: {
-        dark: '#2563eb',
+        dark: '#000000',         // Changed to Black for maximum contrast compliance.
         light: '#FFFFFF'
       }
     });

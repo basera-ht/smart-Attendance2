@@ -62,7 +62,19 @@ const ensureDatabaseConnection = async (req, res, next) => {
 };
 
 // Health check endpoint - Defined BEFORE DB middleware to ensure it works even if DB fails
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  let dbStatus = 'disconnected';
+  let dbError = null;
+
+  try {
+    // Attempt raw query to verify connection
+    const db = await connectDB();
+    dbStatus = 'connected';
+  } catch (err) {
+    dbStatus = 'error';
+    dbError = err.message;
+  }
+
   res.json({
     status: 'OK',
     message: 'Corporate Smart Attendance System API is running',
@@ -72,6 +84,10 @@ app.get('/api/health', (req, res) => {
       hasJwtSecret: !!process.env.JWT_SECRET,
       hasDbUrl: !!process.env.DATABASE_URL,
       hasDbHost: !!process.env.DB_HOST
+    },
+    database: {
+      status: dbStatus,
+      error: dbError
     }
   });
 });
