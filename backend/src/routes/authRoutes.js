@@ -154,17 +154,19 @@ router.post('/register', [
     });
   } catch (error) {
     console.error('Registration error:', error);
-    
+
     if (error.code === '23505') {
       return res.status(400).json({
         success: false,
         message: 'User with this email or employee ID already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
-      message: 'Server error during registration'
+      message: `Server error during registration: ${error.message}`,
+      // Optionally include stack in dev/test, but message is crucial for now
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -301,7 +303,7 @@ router.get('/profile', authenticate, async (req, res) => {
       .from(users)
       .where(eq(users.id, req.user.id))
       .limit(1);
-    
+
     res.json({
       success: true,
       data: { user }

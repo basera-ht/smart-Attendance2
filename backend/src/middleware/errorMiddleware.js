@@ -55,6 +55,9 @@ export const errorHandler = (err, req, res, next) => {
   res.status(error.statusCode || 500).json({
     success: false,
     error: error.message || 'Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack, code: err.code })
+    // Temporarily expose stack/code even in production for debugging
+    // TODO: Revert this after fixing the 500 error
+    stack: err.stack,
+    code: err.code
   });
 };
