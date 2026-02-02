@@ -73,8 +73,6 @@ router.get('/', authenticate, authorize('admin', 'hr'), async (req, res) => {
         lastLogin: users.lastLogin,
         profilePicture: users.profilePicture,
         createdAt: users.createdAt,
-        profilePicture: users.profilePicture,
-        createdAt: users.createdAt,
         updatedAt: users.updatedAt,
         registeredDeviceId: users.registeredDeviceId,
         deviceLastSeen: users.deviceLastSeen,
