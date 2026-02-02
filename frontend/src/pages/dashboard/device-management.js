@@ -11,8 +11,6 @@ import {
     Smartphone,
     SmartphoneNfc,
     RefreshCw,
-    SmartphoneNfc,
-    RefreshCw,
     Clock,
     Edit2
 } from 'lucide-react'
