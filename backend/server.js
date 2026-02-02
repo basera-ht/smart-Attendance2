@@ -61,6 +61,21 @@ const ensureDatabaseConnection = async (req, res, next) => {
   }
 };
 
+// Health check endpoint - Defined BEFORE DB middleware to ensure it works even if DB fails
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    message: 'Corporate Smart Attendance System API is running',
+    timestamp: new Date().toISOString(),
+    env: {
+      nodeEnv: process.env.NODE_ENV,
+      hasJwtSecret: !!process.env.JWT_SECRET,
+      hasDbUrl: !!process.env.DATABASE_URL,
+      hasDbHost: !!process.env.DB_HOST
+    }
+  });
+});
+
 app.use(ensureDatabaseConnection);
 
 // Security middleware

@@ -16,9 +16,8 @@ export const validateEnv = () => {
     missing.forEach(key => {
       console.error(`   - ${key}`);
     });
-    console.error('\n💡 Please check your .env file and ensure all required variables are set.');
-    console.error('   See .env.example for reference.\n');
-    process.exit(1);
+    // Do not exit in production, let it fail with specific error later or return 500 on request
+    // process.exit(1); 
   }
 
   // Validate database configuration
@@ -26,7 +25,7 @@ export const validateEnv = () => {
     console.error('❌ Database configuration missing!');
     console.error('   Please set either DATABASE_URL or DB_HOST (and related DB_* variables)');
     console.error('   See .env.example for reference.\n');
-    process.exit(1);
+    // process.exit(1);
   }
 
   // Warn about weak JWT secret in production
