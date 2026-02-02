@@ -29,8 +29,6 @@ export const signQrToken = ({ qrId, officeId, allowedSSIDs, allowedIPRanges, exp
   const payload = {
     qrId,
     officeId,
-    allowedSSIDHash: hashList(allowedSSIDs),
-    allowedIPRangeHash: hashList(allowedIPRanges),
     exp: Math.floor(new Date(expiresAt).getTime() / 1000)
   };
 
