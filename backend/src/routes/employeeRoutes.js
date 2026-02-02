@@ -73,7 +73,11 @@ router.get('/', authenticate, authorize('admin', 'hr'), async (req, res) => {
         lastLogin: users.lastLogin,
         profilePicture: users.profilePicture,
         createdAt: users.createdAt,
+        profilePicture: users.profilePicture,
+        createdAt: users.createdAt,
         updatedAt: users.updatedAt,
+        registeredDeviceId: users.registeredDeviceId,
+        deviceLastSeen: users.deviceLastSeen,
       })
       .from(users)
       .where(whereClause)
@@ -418,6 +422,7 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
         updatedAt: users.updatedAt,
       });
 
+
     res.json({
       success: true,
       message: 'Employee deactivated successfully',
@@ -431,6 +436,51 @@ router.delete('/:id', authenticate, authorize('admin'), async (req, res) => {
       ...(process.env.NODE_ENV === 'development' && {
         error: error.message
       })
+    });
+  }
+});
+
+// @route   PUT /api/employees/:id/reset-device
+// @desc    Reset (unbind) an employee's registered device
+// @access  Private (Admin only)
+router.put('/:id/reset-device', authenticate, authorize('admin'), async (req, res) => {
+  try {
+    const db = getDB();
+    const { id } = req.params;
+
+    // Check if employee exists
+    const [existingEmployee] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1);
+
+    if (!existingEmployee) {
+      return res.status(404).json({
+        success: false,
+        message: 'Employee not found'
+      });
+    }
+
+    // Reset device ID
+    await db
+      .update(users)
+      .set({
+        registeredDeviceId: null,
+        deviceLastSeen: null,
+        updatedAt: new Date()
+      })
+      .where(eq(users.id, id));
+
+    res.json({
+      success: true,
+      message: 'Device reset successfully. User can now bind a new device.'
+    });
+  } catch (error) {
+    console.error('Device reset error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error during device reset'
     });
   }
 });

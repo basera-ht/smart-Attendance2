@@ -12,7 +12,8 @@ import {
   CalendarDays,
 
   Building2,
-  X
+  X,
+  Smartphone
 } from 'lucide-react'
 
 const Sidebar = ({ isOpen = false, onClose = () => { } }) => {
@@ -68,6 +69,12 @@ const Sidebar = ({ isOpen = false, onClose = () => { } }) => {
       icon: User,
       roles: ['admin', 'hr', 'employee']
     },
+    {
+      name: 'Device Management',
+      href: '/dashboard/device-management',
+      icon: Smartphone,
+      roles: ['admin']
+    },
 
   ]
 
@@ -103,8 +110,8 @@ const Sidebar = ({ isOpen = false, onClose = () => { } }) => {
                 href={item.href}
                 onClick={onClose}
                 className={`flex items-center px-4 py-3 text-sm font-medium rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200'
-                    : 'text-gray-700 hover:bg-gray-100'
+                  ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                  : 'text-gray-700 hover:bg-gray-100'
                   }`}
               >
                 <Icon size={18} className="mr-3" />
