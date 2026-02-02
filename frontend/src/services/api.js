@@ -213,9 +213,13 @@ export const holidaysAPI = {
 // QR API
 export const qrAPI = {
   generate: (data) => api.post('/qr/generate', data),
-  getPublicKey: () => api.get('/qr/public-key'),
   getActive: (params) => api.get('/qr/active', { params }),
   getActivePublic: (params) => api.get('/qr/active-public', { params }),
+  getActiveRotating: (params) => api.get('/qr/active-rotating', { params }),
+  validate: (data) => api.post('/qr/validate', data),
+  validateSecure: (data) => api.post('/qr/validate-secure', data),
+  getPublicKey: () => api.get('/qr/public-key'),
+  getPayload: (qrId) => api.get(`/qr/payload/${qrId}`),
   getValidationLogs: (params) => api.get('/qr/validation-logs', { params }),
 }
 

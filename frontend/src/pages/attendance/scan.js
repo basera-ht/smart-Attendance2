@@ -298,14 +298,13 @@ export default function QRScanPage() {
     try {
       setProcessing(true)
       setError(null)
+      setResult(null)
 
       let token;
       try {
-        // Try decoding as legacy JSON first
         const decoded = JSON.parse(decodedQR)
-        token = decoded.token
+        token = decoded.token || decodedQR
       } catch (e) {
-        // If not JSON, treat the whole payload as the raw token
         token = decodedQR
       }
 
@@ -315,16 +314,39 @@ export default function QRScanPage() {
         return
       }
 
-      // We rely on the Server for strict validation (Time, IP, Network).
-      // This prevents false negatives from client-side clock skew or network API flakes.
+      // NEXT GEN STEP: Get Location
+      const getLocationFn = () => {
+        return new Promise((resolve, reject) => {
+          if (!navigator.geolocation) {
+            reject(new Error("Geolocation not supported"))
+          }
+          navigator.geolocation.getCurrentPosition(
+            (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+            (err) => reject(err),
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+          )
+        })
+      }
+
+      let location = { lat: 0, lng: 0 };
+      try {
+        location = await getLocationFn();
+      } catch (locErr) {
+        console.error("Location Error:", locErr);
+        // Only strict on production/secure mode?
+        // We will try sending 0,0 - server implies strict check, so it might fail if office has GPS.
+        // Or we alert user.
+        setError("Location access required for secure check-in. Please enable GPS.");
+        setProcessing(false)
+        return;
+      }
 
       const isOnline = navigator.onLine
       const authToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-
-      // Get network info purely for logging/server usage
       const info = getNetworkInfo()
       setNetworkInfo(info)
 
+      // Save Local Attempt first (Queue)
       const attempt = await saveAttendanceAttempt({
         token,
         scannedAt: new Date().toISOString(),
@@ -333,7 +355,9 @@ export default function QRScanPage() {
         ssid: ssid.trim() || null,
         status: 'PENDING',
         syncAttempts: 0,
-        authHeader: authToken ? `Bearer ${authToken}` : null
+        authHeader: authToken ? `Bearer ${authToken}` : null,
+        latitude: location.lat,
+        longitude: location.lng,
       })
 
       if (!isOnline) {
@@ -342,42 +366,36 @@ export default function QRScanPage() {
         return
       }
 
-      const response = await attendanceAPI.submit({
-        id: attempt.id,
-        token: attempt.token,
-        scannedAt: attempt.scannedAt,
-        networkState: attempt.networkState,
-        networkType: attempt.networkType,
-        ssid: attempt.ssid
+      // Call Secure Endpoint
+      const response = await qrAPI.validateSecure({
+        token,
+        latitude: location.lat,
+        longitude: location.lng,
+        networkType: info.networkType,
+        ssid: ssid.trim() || null
       })
 
       if (response.data?.success) {
-        const resultItem = response.data?.data?.results?.[0]
-        // If the server returned a result list (bulk sync style) or direct data
-        const resultStatus = resultItem?.status || 'FINAL'
+        // Success
+        await updateQueueRecord({ ...attempt, status: 'FINAL' })
 
-        await updateQueueRecord({
-          ...attempt,
-          status: resultStatus
-        })
-        setResult({ status: resultStatus })
-        // Haptic for success
-        if ('vibrate' in navigator) {
-          navigator.vibrate([100, 50, 100])
+        let msg = "Attendance Recorded"
+        if (response.data.data?.distance) {
+          msg += ` (${response.data.data.distance}m away)`
         }
+
+        setResult({ status: 'FINAL', message: msg })
+
+        if ('vibrate' in navigator) navigator.vibrate([100, 50, 100])
       } else {
-        await updateQueueRecord({
-          ...attempt,
-          status: 'REJECTED'
-        })
-        setError(response.data?.message || 'Attendance validation failed')
+        // Rejected
+        await updateQueueRecord({ ...attempt, status: 'REJECTED' })
+        setError(response.data?.message || 'Check-in Failed')
       }
+
     } catch (err) {
       console.error('QR validation error:', err)
-      const message =
-        err.response?.data?.message ||
-        err.response?.data?.errors?.[0]?.msg ||
-        'Attendance validation failed'
+      const message = err.response?.data?.message || 'Secure Validation Failed'
       setError(message)
     } finally {
       setProcessing(false)
@@ -481,7 +499,7 @@ export default function QRScanPage() {
               </div>
               <div className="space-y-1">
                 <p className="text-white text-2xl font-bold">Authenticated!</p>
-                <p className="text-emerald-100 italic">Attendance recorded successfully</p>
+                <p className="text-emerald-100 italic">{result?.message || 'Attendance recorded successfully'}</p>
               </div>
               <button
                 onClick={() => { setResult(null); startCamera(); }}

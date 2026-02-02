@@ -17,6 +17,7 @@
         "db:apply-qr-migration": "node scripts/applyQRMigration.js"
     },
     "dependencies": {
+        "@turf/turf": "^6.5.0",
         "bcryptjs": "^3.0.2",
         "cors": "^2.8.5",
         "dotenv": "^17.2.3",
@@ -25,18 +26,18 @@
         "express": "^5.1.0",
         "express-rate-limit": "^8.1.0",
         "express-validator": "^7.3.0",
+        "haversine-distance": "^1.2.4",
         "helmet": "^8.1.0",
+        "ipaddr.js": "^2.1.0",
         "jsonwebtoken": "^9.0.2",
         "moment": "^2.30.1",
         "multer": "^2.0.2",
         "nodemailer": "^7.0.10",
         "pg": "^8.13.1",
         "postgres": "^3.4.5",
-        "winston": "^3.18.3",
-        "winston-daily-rotate-file": "^5.0.0",
-        "@turf/turf": "^6.5.0",
         "qrcode": "^1.5.4",
-        "ipaddr.js": "^2.1.0"
+        "winston": "^3.18.3",
+        "winston-daily-rotate-file": "^5.0.0"
     },
     "devDependencies": {
         "drizzle-kit": "^0.29.0",

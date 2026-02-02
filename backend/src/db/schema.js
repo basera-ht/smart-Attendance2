@@ -151,7 +151,7 @@ export const attendanceRelations = relations(smartAttendance.attendance, ({ one 
     fields: [attendance.employeeId],
     references: [users.id],
   }),
-  approvedBy: one(smartAttendance. users, {
+  approvedBy: one(smartAttendance.users, {
     fields: [attendance.approvedById],
     references: [users.id],
     relationName: 'approvedBy',
@@ -198,6 +198,8 @@ export const offices = smartAttendance.table('offices', {
   address: text('address'),
   allowedSSIDs: jsonb('allowed_ssids').default([]),
   allowedIPRanges: jsonb('allowed_ip_ranges').default([]),
+  latitude: varchar('latitude', { length: 50 }),
+  longitude: varchar('longitude', { length: 50 }),
   isActive: boolean('is_active').notNull().default(true),
   createdById: integer('created_by_id').references(() => users.id),
   createdAt: timestamp('created_at').notNull().defaultNow(),

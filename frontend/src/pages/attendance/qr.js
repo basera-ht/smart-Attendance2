@@ -19,77 +19,83 @@ export default function ShowQRPage() {
   const [activeQR, setActiveQR] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
   const [timeLeft, setTimeLeft] = useState(0)
+  const [rotationInterval, setRotationInterval] = useState(30)
 
-  const loadOffices = async () => {
-    try {
-      const response = await officesAPI.getOffices({ activeOnly: 'true' })
-      if (response.data?.success) {
-        const list = response.data.data || []
-        setOffices(list)
-        if (list.length > 0 && !selectedOffice) {
-          setSelectedOffice(String(list[0].id))
-        }
-      }
-    } catch (err) {
-      console.error('Load offices error:', err)
-      setError('Unable to load offices')
-    }
-  }
-
-  const loadQR = useCallback(async (isManual = false) => {
-    if (!selectedOffice) return
-    if (isManual) setRefreshing(true)
-    else setLoading(true)
-
-    setError('')
-    try {
-      const response = await qrAPI.getActivePublic({ officeId: selectedOffice })
-      if (response.data?.success && response.data.data) {
-        setActiveQR(response.data.data)
-        const expiry = new Date(response.data.data.expiresAt)
-        const seconds = Math.max(0, Math.floor((expiry.getTime() - Date.now()) / 1000))
-        setTimeLeft(seconds)
-      } else {
-        setActiveQR(null)
-        setError(response.data?.message || 'No active QR found for this office.')
-      }
-    } catch (err) {
-      console.error('Load active QR error:', err)
-      setActiveQR(null)
-      setError(err.response?.data?.message || 'Unable to load QR')
-    } finally {
-      setLoading(false)
-      setRefreshing(false)
-    }
-  }, [selectedOffice])
-
+  // 1. Load Offices
   useEffect(() => {
+    const loadOffices = async () => {
+      try {
+        const response = await officesAPI.getOffices({ activeOnly: 'true' })
+        if (response.data?.success) {
+          const list = response.data.data || []
+          setOffices(list)
+          if (list.length > 0 && !selectedOffice) {
+            setSelectedOffice(String(list[0].id))
+          }
+        }
+      } catch (err) {
+        console.error('Load offices error:', err)
+        setError('Unable to load offices')
+      }
+    }
     loadOffices()
   }, [])
 
-  useEffect(() => {
-    loadQR()
-  }, [selectedOffice, loadQR])
+  // 2. Load Rotating QR
+  const loadRotatingQR = useCallback(async () => {
+    if (!selectedOffice) return
 
-  // Timer logic
+    // Don't show full loading spinner on every rotation to keep UI smooth
+    // Only show if it's the first load or if specific state needs it
+    if (!activeQR) setLoading(true)
+
+    try {
+      const response = await qrAPI.getActiveRotating({ officeId: selectedOffice })
+      if (response.data?.success) {
+        const { qrId, qrImage, expiresAt, interval } = response.data.data
+        setActiveQR({ qrId, qrImage })
+
+        // Sync timer
+        const expiry = new Date(expiresAt)
+        const seconds = Math.max(0, Math.floor((expiry.getTime() - Date.now()) / 1000))
+        setTimeLeft(seconds)
+        if (interval) setRotationInterval(interval)
+
+        setError('')
+      } else {
+        setError(response.data?.message || 'Failed to load code')
+      }
+    } catch (err) {
+      console.error('Rotate error:', err)
+      setError('Connection lost. Retrying...')
+    } finally {
+      setLoading(false)
+    }
+  }, [selectedOffice])
+
+  // Initial Load
   useEffect(() => {
-    if (timeLeft <= 0) return
+    loadRotatingQR()
+  }, [selectedOffice, loadRotatingQR])
+
+  // 3. Timer & Auto-Refresh Loop
+  useEffect(() => {
+    if (!activeQR) return
 
     const timer = setInterval(() => {
-      setTimeLeft(prev => {
+      setTimeLeft((prev) => {
         if (prev <= 1) {
-          clearInterval(timer)
-          loadQR() // Auto refresh
-          return 0
+          // Time up! Refresh immediately
+          loadRotatingQR()
+          return rotationInterval
         }
         return prev - 1
       })
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [timeLeft, loadQR])
+  }, [activeQR, rotationInterval, loadRotatingQR])
 
   return (
     <ProtectedRoute requiredRoles={['admin', 'hr', 'employee']}>
@@ -97,12 +103,15 @@ export default function ShowQRPage() {
         <div className="min-h-[calc(100vh-10rem)] flex items-center justify-center py-10 px-4 bg-slate-900/50 backdrop-blur-sm rounded-[3rem] my-4">
           <div className="w-full max-w-sm flex flex-col items-center">
 
-            {/* Minimalist Office Selector */}
-            <div className="w-full mb-12 relative group">
+            {/* Office Selector */}
+            <div className="w-full mb-8 relative group">
               <select
                 className="w-full bg-slate-800/50 border border-slate-700/50 rounded-2xl py-3 px-10 text-slate-300 font-medium appearance-none focus:outline-none focus:ring-1 focus:ring-blue-500/50 transition-all cursor-pointer text-center text-sm"
                 value={selectedOffice}
-                onChange={(e) => setSelectedOffice(e.target.value)}
+                onChange={(e) => {
+                  setSelectedOffice(e.target.value)
+                  setActiveQR(null) // Reset to trigger loading state
+                }}
               >
                 {offices.map((office) => (
                   <option key={office.id} value={office.id} className="bg-slate-900 text-white">
@@ -114,64 +123,57 @@ export default function ShowQRPage() {
               <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
             </div>
 
-            {/* Focused QR Display */}
+            {/* QR Display */}
             <div className="relative group w-full aspect-square max-w-[340px]">
-              {/* Subtle ambient glow */}
               <div className="absolute -inset-4 bg-blue-500/10 rounded-[3rem] blur-3xl group-hover:bg-blue-500/15 transition-all duration-1000"></div>
 
-              <div className="relative w-full h-full bg-white rounded-[2.5rem] p-8 shadow-2xl flex items-center justify-center">
-                {loading ? (
+              <div className="relative w-full h-full bg-white rounded-[2.5rem] p-8 shadow-2xl flex items-center justify-center overflow-hidden">
+                {loading && !activeQR ? (
                   <Loader2 className="w-10 h-10 text-blue-500 animate-spin" />
                 ) : activeQR?.qrImage ? (
                   <div className="relative w-full h-full flex items-center justify-center">
                     <img
                       src={activeQR.qrImage}
-                      alt="QR"
-                      className={`w-full h-full object-contain ${refreshing ? 'opacity-20' : 'opacity-100'} transition-opacity`}
+                      alt="Secure QR"
+                      className="w-full h-full object-contain"
                     />
 
-                    {/* Small, Clean Logo Overlay */}
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 bg-white rounded-xl p-1.5 shadow-md border border-slate-50">
-                      <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
+                    {/* Security Watermark / Animation */}
+                    <div className="absolute inset-0 pointer-events-none">
+                      <div className="w-full h-1 bg-blue-500/20 animate-[scan_2s_linear_infinite]" />
                     </div>
                   </div>
                 ) : (
                   <div className="text-center p-4">
                     <AlertCircle className="w-8 h-8 text-slate-200 mx-auto mb-2" />
-                    <p className="text-slate-400 text-sm font-medium">{error || 'No active QR'}</p>
+                    <p className="text-slate-400 text-sm font-medium">{error || 'Initializing Secure QR...'}</p>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Minimalist Digital Timer */}
-            <div className="mt-12 w-full flex flex-col items-center gap-6">
-              {activeQR && (
-                <>
-                  <div className="flex flex-col items-center">
-                    <div className={`text-4xl font-mono font-bold tracking-tighter ${timeLeft < 20 ? 'text-rose-500 animate-pulse' : 'text-white'}`}>
-                      {Math.floor(timeLeft / 60)}:{String(timeLeft % 60).padStart(2, '0')}
-                    </div>
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mt-1">Token Lifetime</span>
-                  </div>
-
-                  <button
-                    onClick={() => loadQR(true)}
-                    disabled={refreshing || loading}
-                    className="group bg-slate-800/40 hover:bg-slate-800/60 border border-slate-700/50 text-slate-400 hover:text-white px-6 py-2.5 rounded-full text-xs font-bold flex items-center gap-2 transition-all disabled:opacity-30"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-blue-500' : ''}`} />
-                    Manual Sync
-                  </button>
-                </>
-              )}
+            {/* Security Timer Bar */}
+            <div className="mt-8 w-full max-w-[200px] space-y-2">
+              <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                <span>Secure ID</span>
+                <span>{timeLeft}s</span>
+              </div>
+              <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all duration-1000 ${timeLeft < 10 ? 'bg-rose-500' : 'bg-blue-500'}`}
+                  style={{ width: `${(timeLeft / rotationInterval) * 100}%` }}
+                />
+              </div>
             </div>
 
-            {/* Minimal Background Context */}
-            <div className="mt-16 flex items-center gap-3 px-6 py-3 bg-white/5 rounded-2xl border border-white/5">
+            {/* Info */}
+            <div className="mt-8 flex items-center gap-3 px-6 py-3 bg-white/5 rounded-2xl border border-white/5">
               <Scan className="w-4 h-4 text-blue-400" />
-              <p className="text-slate-400 text-[11px] font-medium tracking-wide">Align with terminal for automatic validation</p>
+              <p className="text-slate-400 text-[11px] font-medium tracking-wide">
+                Valid for ONE scan only. Don't share.
+              </p>
             </div>
+
           </div>
         </div>
       </DashboardLayout>
