@@ -483,6 +483,66 @@ router.put('/:id/reset-device', authenticate, authorize('admin'), async (req, re
   }
 });
 
+// @route   PUT /api/employees/:id/device
+// @desc    Update an employee's registered device ID
+// @access  Private (Admin only)
+router.put('/:id/device', authenticate, authorize('admin'), [
+    body('deviceId').trim().notEmpty().withMessage('Device ID is required')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
+        }
+
+        const db = getDB();
+        const { id } = req.params;
+        const { deviceId } = req.body;
+
+        // Check if employee exists
+        const [existingEmployee] = await db
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.id, id))
+            .limit(1);
+
+        if (!existingEmployee) {
+            return res.status(404).json({
+                success: false,
+                message: 'Employee not found'
+            });
+        }
+
+        // Check if device ID is already in use by another user (optional, but good for security)
+        // For now, we allow overwriting or sharing (though usually 1:1)
+        // Let's just update for now.
+
+        await db
+            .update(users)
+            .set({
+                registeredDeviceId: deviceId,
+                deviceLastSeen: new Date(),
+                updatedAt: new Date()
+            })
+            .where(eq(users.id, id));
+
+        res.json({
+            success: true,
+            message: 'Device ID updated successfully'
+        });
+    } catch (error) {
+        console.error('Device update error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Server error during device update'
+        });
+    }
+});
+
 // @route   GET /api/employees/stats/overview
 // @desc    Get employee statistics
 // @access  Private (Admin/HR only)
