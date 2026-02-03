@@ -238,7 +238,7 @@ router.post('/login', [
     await db
       .update(users)
       .set({ lastLogin: new Date() })
-      .set({ lastLogin: new Date() })
+
       .where(eq(users.id, user.id));
 
     // Attempt to bind/verify device if provided
