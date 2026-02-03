@@ -11,12 +11,12 @@ export default function DashboardLayout({ children }) {
 
   return (
     <ProtectedRoute>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 flex flex-col">
         <Navbar
           onMenuToggle={() => setIsMobileNavOpen((prev) => !prev)}
           isMobileNavOpen={isMobileNavOpen}
         />
-        <div className="flex">
+        <div className="flex flex-1">
           <Sidebar
             isOpen={isMobileNavOpen}
             onClose={() => setIsMobileNavOpen(false)}
