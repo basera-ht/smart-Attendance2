@@ -5,6 +5,7 @@ import { attendanceAPI, employeesAPI, leavesAPI } from '../../services/api'
 import DashboardLayout from '../../components/DashboardLayout'
 import MonthlyCalendarView from '../../components/MonthlyCalendarView'
 import InlineAlert from '../../components/InlineAlert'
+import { getDeviceId } from '../../utils/deviceUtils'
 
 export default function Attendance() {
   const { user, hasRole, hasAnyRole } = useAuth()
@@ -30,12 +31,12 @@ export default function Attendance() {
     } catch (error) {
       if (error.response?.status === 429 && retryCount < maxRetries) {
         const retryAfter = error.response.headers['retry-after']
-        const waitTime = retryAfter 
-          ? parseInt(retryAfter) * 1000 
+        const waitTime = retryAfter
+          ? parseInt(retryAfter) * 1000
           : Math.min(2000 * Math.pow(2, retryCount), 10000) // Max 10 seconds
-        
+
         console.log(`Rate limited. Retrying after ${waitTime}ms (attempt ${retryCount + 1}/${maxRetries})`)
-        
+
         await new Promise(resolve => setTimeout(resolve, waitTime))
         return retryApiCall(apiCall, retryCount + 1, maxRetries)
       }
@@ -47,7 +48,7 @@ export default function Attendance() {
     const fetchData = async () => {
       try {
         setLoading(true)
-        
+
         // Fetch attendance with retry logic
         const attendanceResponse = await retryApiCall(() => attendanceAPI.getTodayAttendance())
         if (attendanceResponse.data && attendanceResponse.data.success) {
@@ -55,7 +56,7 @@ export default function Attendance() {
           // Handle both array and single object responses
           const attendanceList = Array.isArray(data) ? data : [data]
           setAttendance(attendanceList)
-          
+
           // For employees, get their own record for quick action button
           if (hasRole('employee')) {
             if (attendanceList.length > 0) {
@@ -128,9 +129,10 @@ export default function Attendance() {
       const response = await attendanceAPI.checkIn({
         employeeId: user.employeeId,
         location: 'Office',
-        notes: 'Checked in via web portal'
+        notes: 'Checked in via web portal',
+        deviceId: getDeviceId()
       })
-      
+
       if (response.data && response.data.success) {
         showPageAlert('Check-in successful!', 'success')
         // Refresh attendance data
@@ -147,9 +149,10 @@ export default function Attendance() {
       const response = await attendanceAPI.checkOut({
         employeeId: user.employeeId,
         location: 'Office',
-        notes: 'Checked out via web portal'
+        notes: 'Checked out via web portal',
+        deviceId: getDeviceId()
       })
-      
+
       if (response.data && response.data.success) {
         showPageAlert('Check-out successful!', 'success')
         // Refresh attendance data
@@ -163,15 +166,16 @@ export default function Attendance() {
 
   const handleQuickCheckIn = async () => {
     if (quickActionLoading) return
-    
+
     try {
       setQuickActionLoading(true)
       const response = await attendanceAPI.checkIn({
         employeeId: user.employeeId,
         location: 'Office',
-        notes: 'Quick check-in'
+        notes: 'Quick check-in',
+        deviceId: getDeviceId()
       })
-      
+
       if (response.data && response.data.success) {
         // Refresh data with retry logic
         const attendanceResponse = await retryApiCall(() => attendanceAPI.getTodayAttendance())
@@ -199,15 +203,16 @@ export default function Attendance() {
 
   const handleQuickCheckOut = async () => {
     if (quickActionLoading) return
-    
+
     try {
       setQuickActionLoading(true)
       const response = await attendanceAPI.checkOut({
         employeeId: user.employeeId,
         location: 'Office',
-        notes: 'Quick check-out'
+        notes: 'Quick check-out',
+        deviceId: getDeviceId()
       })
-      
+
       if (response.data && response.data.success) {
         // Refresh data with retry logic
         const attendanceResponse = await retryApiCall(() => attendanceAPI.getTodayAttendance())
@@ -253,7 +258,7 @@ export default function Attendance() {
         location: 'Office',
         notes: `Checked in by admin: ${user.name}`
       })
-      
+
       if (response.data && response.data.success) {
         showPageAlert(response.data.message || 'Check-in successful!', 'success')
         // Refresh attendance data
@@ -287,7 +292,7 @@ export default function Attendance() {
         location: 'Office',
         notes: `Checked out by admin: ${user.name}`
       })
-      
+
       if (response.data && response.data.success) {
         showPageAlert(response.data.message || 'Check-out successful!', 'success')
         // Refresh attendance data
@@ -328,28 +333,28 @@ export default function Attendance() {
 
   const handleMarkAllPresent = async () => {
     if (bulkCheckInLoading) return
-    
+
     setBulkCheckInLoading(true)
-    
+
     try {
       // Fetch approved leaves for today
       const today = new Date()
       today.setHours(0, 0, 0, 0)
       const todayEnd = new Date(today)
       todayEnd.setHours(23, 59, 59, 999)
-      
-      const leavesResponse = await retryApiCall(() => 
+
+      const leavesResponse = await retryApiCall(() =>
         leavesAPI.getLeaves({
           status: 'approved',
           startDate: today.toISOString(),
           endDate: todayEnd.toISOString()
         })
       )
-      
-      const approvedLeaves = leavesResponse.data?.success 
+
+      const approvedLeaves = leavesResponse.data?.success
         ? (leavesResponse.data.data?.docs || leavesResponse.data.data?.data || leavesResponse.data.data || [])
         : []
-      
+
       // Create a set of employee IDs who are on leave today
       const employeesOnLeave = new Set()
       approvedLeaves.forEach(leave => {
@@ -357,7 +362,7 @@ export default function Attendance() {
         const leaveEnd = new Date(leave.endDate)
         leaveStart.setHours(0, 0, 0, 0)
         leaveEnd.setHours(23, 59, 59, 999)
-        
+
         // Check if today falls within the leave period
         if (today >= leaveStart && today <= leaveEnd) {
           const employeeId = leave.employeeId || leave.employee?.id || leave.employee?._id
@@ -366,23 +371,23 @@ export default function Attendance() {
           }
         }
       })
-      
+
       // Get all employees who haven't checked in today and are not on leave
       const employeesNotCheckedIn = employees.filter(emp => {
         const employeeId = emp._id?.toString() || emp.id?.toString()
-        
+
         // Skip if employee is on leave
         if (employeesOnLeave.has(employeeId)) {
           return false
         }
-        
+
         const attendanceRecord = attendance.find(record => {
           const recordEmployeeId = getEmployeeIdFromRecord(record)
           return recordEmployeeId && recordEmployeeId.toString() === employeeId
         })
-        
+
         if (!attendanceRecord) return true // No record means not checked in
-        
+
         const checkInTime = attendanceRecord.checkIn?.time || attendanceRecord.checkIn
         return !checkInTime
       })
@@ -527,7 +532,7 @@ export default function Attendance() {
                       placeholder="Search employee..."
                       value={employeeSearchTerm}
                       onChange={(e) => setEmployeeSearchTerm(e.target.value)}
-                    className="w-full border border-gray-300 rounded-lg px-4 py-2 pl-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full border border-gray-300 rounded-lg px-4 py-2 pl-10 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                     />
                     <svg
                       className="absolute left-3 top-2.5 h-4 w-4 text-gray-400"
@@ -630,21 +635,19 @@ export default function Attendance() {
             <nav className="flex -mb-px">
               <button
                 onClick={() => setActiveTab('today')}
-                className={`py-4 px-6 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === 'today'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
+                className={`py-4 px-6 text-sm font-medium border-b-2 transition-colors ${activeTab === 'today'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
               >
                 Today's Attendance
               </button>
               <button
                 onClick={() => setActiveTab('calendar')}
-                className={`py-4 px-6 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === 'calendar'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
+                className={`py-4 px-6 text-sm font-medium border-b-2 transition-colors ${activeTab === 'calendar'
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  }`}
               >
                 Monthly Calendar
               </button>
@@ -655,190 +658,188 @@ export default function Attendance() {
         {/* Tab Content */}
         {activeTab === 'today' ? (
           <div className="bg-white shadow rounded-lg">
-          <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Today's Attendance</h3>
-          </div>
-          <div className="md:hidden space-y-3 p-4">
-            {attendance.length > 0 ? (
-              attendance.map((record, index) => {
-                const employeeId = getEmployeeIdFromRecord(record)
-                const employeeName = getEmployeeName(record)
-                const checkInTime = record.checkIn 
-                  ? (typeof record.checkIn === 'string' ? record.checkIn : new Date(record.checkIn).toLocaleTimeString())
-                  : (record.checkIn?.time ? new Date(record.checkIn.time).toLocaleTimeString() : null)
-                const checkOutTime = record.checkOut
-                  ? (typeof record.checkOut === 'string' ? record.checkOut : new Date(record.checkOut).toLocaleTimeString())
-                  : (record.checkOut?.time ? new Date(record.checkOut.time).toLocaleTimeString() : null)
-                const status = record.status || (checkInTime ? 'Present' : 'Absent')
+            <div className="px-4 sm:px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">Today's Attendance</h3>
+            </div>
+            <div className="md:hidden space-y-3 p-4">
+              {attendance.length > 0 ? (
+                attendance.map((record, index) => {
+                  const employeeId = getEmployeeIdFromRecord(record)
+                  const employeeName = getEmployeeName(record)
+                  const checkInTime = record.checkIn
+                    ? (typeof record.checkIn === 'string' ? record.checkIn : new Date(record.checkIn).toLocaleTimeString())
+                    : (record.checkIn?.time ? new Date(record.checkIn.time).toLocaleTimeString() : null)
+                  const checkOutTime = record.checkOut
+                    ? (typeof record.checkOut === 'string' ? record.checkOut : new Date(record.checkOut).toLocaleTimeString())
+                    : (record.checkOut?.time ? new Date(record.checkOut.time).toLocaleTimeString() : null)
+                  const status = record.status || (checkInTime ? 'Present' : 'Absent')
 
-                return (
-                  <div key={record.id || record._id || index} className="rounded-lg border border-gray-200 p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm text-gray-500">Employee</p>
-                        <p className="text-base font-semibold text-gray-900">{employeeName}</p>
-                      </div>
-                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${
-                        status === 'Present' || status === 'present'
+                  return (
+                    <div key={record.id || record._id || index} className="rounded-lg border border-gray-200 p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm text-gray-500">Employee</p>
+                          <p className="text-base font-semibold text-gray-900">{employeeName}</p>
+                        </div>
+                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${status === 'Present' || status === 'present'
                           ? 'bg-green-100 text-green-800'
                           : status === 'Late' || status === 'late'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : status === 'Half Day' || status === 'half-day'
-                          ? 'bg-purple-100 text-purple-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}>
-                        {status === 'half-day' ? 'Half Day' : status}
-                      </span>
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-gray-600">
-                      <div>
-                        <p className="text-xs uppercase text-gray-400">Check In</p>
-                        <p className="text-gray-900">{checkInTime || '-'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase text-gray-400">Check Out</p>
-                        <p className="text-gray-900">{checkOutTime || '-'}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs uppercase text-gray-400">Date</p>
-                        <p className="text-gray-900">{record.date || new Date().toISOString().split('T')[0]}</p>
-                      </div>
-                    </div>
-                    {isAdmin && employeeId && (
-                      <div className="mt-3 flex gap-2">
-                        {!checkInTime && (
-                          <button
-                            onClick={() => handleAdminCheckIn(employeeId)}
-                            disabled={actionLoading[`checkin-${employeeId}`]}
-                            className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-xs font-medium transition-colors"
-                          >
-                            {actionLoading[`checkin-${employeeId}`] ? '...' : 'Check In'}
-                          </button>
-                        )}
-                        {checkInTime && !checkOutTime && (
-                          <button
-                            onClick={() => handleAdminCheckOut(employeeId)}
-                            disabled={actionLoading[`checkout-${employeeId}`]}
-                            className="flex-1 bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-xs font-medium transition-colors"
-                          >
-                            {actionLoading[`checkout-${employeeId}`] ? '...' : 'Check Out'}
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })
-            ) : (
-              <div className="text-center text-sm text-gray-500 py-6">
-                No attendance records found for today
-              </div>
-            )}
-          </div>
-          <div className="hidden md:block overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Employee
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Check In
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Check Out
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Date
-                  </th>
-                  {isAdmin && (
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  )}
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {attendance.length > 0 ? (
-                  attendance.map((record, index) => {
-                    const employeeId = getEmployeeIdFromRecord(record)
-                    const employeeName = getEmployeeName(record)
-                    const checkInTime = record.checkIn 
-                      ? (typeof record.checkIn === 'string' ? record.checkIn : new Date(record.checkIn).toLocaleTimeString())
-                      : (record.checkIn?.time ? new Date(record.checkIn.time).toLocaleTimeString() : null)
-                    const checkOutTime = record.checkOut
-                      ? (typeof record.checkOut === 'string' ? record.checkOut : new Date(record.checkOut).toLocaleTimeString())
-                      : (record.checkOut?.time ? new Date(record.checkOut.time).toLocaleTimeString() : null)
-                    const status = record.status || (checkInTime ? 'Present' : 'Absent')
-                    
-                    return (
-                      <tr key={record.id || record._id || index}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {employeeName}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {checkInTime || '-'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {checkOutTime || '-'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                            status === 'Present' || status === 'present'
-                              ? 'bg-green-100 text-green-800' 
-                              : status === 'Late' || status === 'late'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : status === 'Half Day' || status === 'half-day'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : status === 'Half Day' || status === 'half-day'
                               ? 'bg-purple-100 text-purple-800'
                               : 'bg-red-100 text-red-800'
                           }`}>
-                            {status === 'half-day' ? 'Half Day' : status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {record.date || new Date().toISOString().split('T')[0]}
-                        </td>
-                        {isAdmin && employeeId && (
-                          <td className="px-6 py-4 whitespace-nowrap text-sm">
-                            <div className="flex space-x-2">
-                              {!checkInTime && (
-                                <button
-                                  onClick={() => handleAdminCheckIn(employeeId)}
-                                  disabled={actionLoading[`checkin-${employeeId}`]}
-                                  className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-xs font-medium transition-colors"
-                                >
-                                  {actionLoading[`checkin-${employeeId}`] ? '...' : 'Check In'}
-                                </button>
-                              )}
-                              {checkInTime && !checkOutTime && (
-                                <button
-                                  onClick={() => handleAdminCheckOut(employeeId)}
-                                  disabled={actionLoading[`checkout-${employeeId}`]}
-                                  className="bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-xs font-medium transition-colors"
-                                >
-                                  {actionLoading[`checkout-${employeeId}`] ? '...' : 'Check Out'}
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        )}
-                      </tr>
-                    )
-                  })
-                ) : (
+                          {status === 'half-day' ? 'Half Day' : status}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-gray-600">
+                        <div>
+                          <p className="text-xs uppercase text-gray-400">Check In</p>
+                          <p className="text-gray-900">{checkInTime || '-'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase text-gray-400">Check Out</p>
+                          <p className="text-gray-900">{checkOutTime || '-'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs uppercase text-gray-400">Date</p>
+                          <p className="text-gray-900">{record.date || new Date().toISOString().split('T')[0]}</p>
+                        </div>
+                      </div>
+                      {isAdmin && employeeId && (
+                        <div className="mt-3 flex gap-2">
+                          {!checkInTime && (
+                            <button
+                              onClick={() => handleAdminCheckIn(employeeId)}
+                              disabled={actionLoading[`checkin-${employeeId}`]}
+                              className="flex-1 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-xs font-medium transition-colors"
+                            >
+                              {actionLoading[`checkin-${employeeId}`] ? '...' : 'Check In'}
+                            </button>
+                          )}
+                          {checkInTime && !checkOutTime && (
+                            <button
+                              onClick={() => handleAdminCheckOut(employeeId)}
+                              disabled={actionLoading[`checkout-${employeeId}`]}
+                              className="flex-1 bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-2 rounded text-xs font-medium transition-colors"
+                            >
+                              {actionLoading[`checkout-${employeeId}`] ? '...' : 'Check Out'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              ) : (
+                <div className="text-center text-sm text-gray-500 py-6">
+                  No attendance records found for today
+                </div>
+              )}
+            </div>
+            <div className="hidden md:block overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
                   <tr>
-                    <td colSpan={isAdmin ? 6 : 5} className="px-6 py-4 text-center text-sm text-gray-500">
-                      No attendance records found for today
-                    </td>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Employee
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Check In
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Check Out
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Date
+                    </th>
+                    {isAdmin && (
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Actions
+                      </th>
+                    )}
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {attendance.length > 0 ? (
+                    attendance.map((record, index) => {
+                      const employeeId = getEmployeeIdFromRecord(record)
+                      const employeeName = getEmployeeName(record)
+                      const checkInTime = record.checkIn
+                        ? (typeof record.checkIn === 'string' ? record.checkIn : new Date(record.checkIn).toLocaleTimeString())
+                        : (record.checkIn?.time ? new Date(record.checkIn.time).toLocaleTimeString() : null)
+                      const checkOutTime = record.checkOut
+                        ? (typeof record.checkOut === 'string' ? record.checkOut : new Date(record.checkOut).toLocaleTimeString())
+                        : (record.checkOut?.time ? new Date(record.checkOut.time).toLocaleTimeString() : null)
+                      const status = record.status || (checkInTime ? 'Present' : 'Absent')
+
+                      return (
+                        <tr key={record.id || record._id || index}>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {employeeName}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {checkInTime || '-'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {checkOutTime || '-'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${status === 'Present' || status === 'present'
+                              ? 'bg-green-100 text-green-800'
+                              : status === 'Late' || status === 'late'
+                                ? 'bg-yellow-100 text-yellow-800'
+                                : status === 'Half Day' || status === 'half-day'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : 'bg-red-100 text-red-800'
+                              }`}>
+                              {status === 'half-day' ? 'Half Day' : status}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {record.date || new Date().toISOString().split('T')[0]}
+                          </td>
+                          {isAdmin && employeeId && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm">
+                              <div className="flex space-x-2">
+                                {!checkInTime && (
+                                  <button
+                                    onClick={() => handleAdminCheckIn(employeeId)}
+                                    disabled={actionLoading[`checkin-${employeeId}`]}
+                                    className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-xs font-medium transition-colors"
+                                  >
+                                    {actionLoading[`checkin-${employeeId}`] ? '...' : 'Check In'}
+                                  </button>
+                                )}
+                                {checkInTime && !checkOutTime && (
+                                  <button
+                                    onClick={() => handleAdminCheckOut(employeeId)}
+                                    disabled={actionLoading[`checkout-${employeeId}`]}
+                                    className="bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-xs font-medium transition-colors"
+                                  >
+                                    {actionLoading[`checkout-${employeeId}`] ? '...' : 'Check Out'}
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          )}
+                        </tr>
+                      )
+                    })
+                  ) : (
+                    <tr>
+                      <td colSpan={isAdmin ? 6 : 5} className="px-6 py-4 text-center text-sm text-gray-500">
+                        No attendance records found for today
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
         ) : (
           <MonthlyCalendarView isAdmin={isAdmin} />
         )}
@@ -849,11 +850,10 @@ export default function Attendance() {
             <button
               onClick={canCheckIn ? handleQuickCheckIn : handleQuickCheckOut}
               disabled={quickActionLoading}
-              className={`${
-                canCheckIn 
-                  ? 'bg-green-500 hover:bg-green-600 shadow-lg hover:shadow-xl' 
-                  : 'bg-red-500 hover:bg-red-600 shadow-lg hover:shadow-xl'
-              } disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-4 rounded-full font-semibold text-lg transition-all transform hover:scale-105 flex items-center space-x-3`}
+              className={`${canCheckIn
+                ? 'bg-green-500 hover:bg-green-600 shadow-lg hover:shadow-xl'
+                : 'bg-red-500 hover:bg-red-600 shadow-lg hover:shadow-xl'
+                } disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-4 rounded-full font-semibold text-lg transition-all transform hover:scale-105 flex items-center space-x-3`}
             >
               {quickActionLoading ? (
                 <>

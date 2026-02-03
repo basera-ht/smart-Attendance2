@@ -7,6 +7,7 @@ import { AttendanceBarChart, StatusPieChart } from '../components/AnalyticsChart
 import DashboardLayout from '../components/DashboardLayout'
 import InlineAlert from '../components/InlineAlert'
 import { CheckCircle, Clock, AlertCircle, Plus, Edit, Trash2, Calendar, X, Users } from 'lucide-react'
+import { getDeviceId } from '../utils/deviceUtils'
 
 export default function Dashboard() {
   const router = useRouter()
@@ -291,7 +292,8 @@ export default function Dashboard() {
       setChecking(prev => ({ ...prev, checkIn: true }))
       const response = await attendanceAPI.checkIn({
         location: 'Office',
-        notes: 'Checked in via dashboard'
+        notes: 'Checked in via dashboard',
+        deviceId: getDeviceId()
       })
 
       if (response.data && response.data.success) {
@@ -323,7 +325,8 @@ export default function Dashboard() {
       setChecking(prev => ({ ...prev, checkOut: true }))
       const response = await attendanceAPI.checkOut({
         location: 'Office',
-        notes: 'Checked out via dashboard'
+        notes: 'Checked out via dashboard',
+        deviceId: getDeviceId()
       })
 
       if (response.data && response.data.success) {

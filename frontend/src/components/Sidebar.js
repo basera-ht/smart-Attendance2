@@ -13,7 +13,9 @@ import {
 
   Building2,
   X,
-  Smartphone
+  Smartphone,
+  QrCode,
+  Scan
 } from 'lucide-react'
 
 const Sidebar = ({ isOpen = false, onClose = () => { } }) => {
@@ -76,6 +78,18 @@ const Sidebar = ({ isOpen = false, onClose = () => { } }) => {
       roles: ['admin']
     },
 
+    {
+      name: 'Scan QR',
+      href: '/dashboard/scan-qr',
+      icon: Scan,
+      roles: ['employee', 'admin', 'hr']
+    },
+    {
+      name: 'QR Kiosk',
+      href: '/dashboard/qr-kiosk',
+      icon: QrCode,
+      roles: ['admin', 'hr']
+    },
   ]
 
   const filteredMenuItems = menuItems.filter(item =>

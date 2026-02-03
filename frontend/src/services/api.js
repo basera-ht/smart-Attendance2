@@ -147,6 +147,7 @@ export const authAPI = {
 export const attendanceAPI = {
   checkIn: (data) => api.post('/attendance/checkin', data),
   checkInSecure: (data) => api.post('/attendance/checkin-secure', data),
+  checkInQR: (data) => api.post('/attendance/checkin-qr', data),
   checkOut: (data) => api.post('/attendance/checkout', data),
 
   getAttendance: (params) => api.get('/attendance', { params }),
@@ -216,6 +217,7 @@ export const holidaysAPI = {
 export const officesAPI = {
   getOffices: (params) => api.get('/offices', { params }),
   getNetworkIp: () => api.get('/offices/network/ip'),
+  getQRToken: (id) => api.get(`/offices/${id}/qr-token`),
   createOffice: (data) => api.post('/offices', data),
   updateOffice: (officeId, data) => api.put(`/offices/${officeId}`, data),
   deleteOffice: (officeId) => api.delete(`/offices/${officeId}`),

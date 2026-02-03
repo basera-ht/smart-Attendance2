@@ -9,6 +9,8 @@ import { checkIn, checkOut, exportMonthlyExcel } from '../controllers/attendance
 
 import { getClientIp, isIpInRanges } from '../utils/ipUtils.js';
 import { verifyDevice } from '../services/deviceService.js';
+import { verifyQRToken } from '../services/qrService.js';
+import { calculateDistance } from '../utils/geofence.js';
 
 
 const router = express.Router();
@@ -145,6 +147,108 @@ router.post('/checkin-secure', authenticate, async (req, res) => {
   }
 });
 
+
+
+// @route   POST /api/attendance/checkin-qr
+// @desc    QR Code Check-In
+// @access  Private
+router.post('/checkin-qr', authenticate, async (req, res) => {
+  try {
+    const db = getDB();
+    const userId = req.user.id;
+    const { qrToken, deviceId, latitude, longitude } = req.body;
+    const ipAddress = getClientIp(req);
+    const userAgent = req.get('User-Agent') || '';
+
+    // 1. Verify Device Binding
+    console.log(`[QRCheckIn] User: ${userId}, DeviceId: ${deviceId}`);
+    if (!deviceId) {
+      return res.status(400).json({ success: false, message: 'Device ID is required.' });
+    }
+
+    // Check binding (strict: must match registered device)
+    try {
+      await verifyDevice(userId, deviceId);
+    } catch (e) {
+      console.error(`[QRCheckIn] Device verification failed for user ${userId}: ${e.message}`);
+      return res.status(403).json({ success: false, message: e.message });
+    }
+
+    // 2. Verify QR Token
+    const qrData = verifyQRToken(qrToken);
+    if (!qrData) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired QR code. Please scan again.' });
+    }
+
+    const { officeId } = qrData;
+
+    // 3. Get Office Details
+    const [office] = await db.select().from(offices).where(eq(offices.id, officeId)).limit(1);
+    if (!office) {
+      return res.status(400).json({ success: false, message: 'Invalid Office ID in QR code.' });
+    }
+
+    // --- SECURE CHECKS (IP & GPS) ---
+
+    // A. IP Check
+    if (office.allowedIPRanges && office.allowedIPRanges.length > 0) {
+      if (!isIpInRanges(ipAddress, office.allowedIPRanges)) {
+        return res.status(400).json({ success: false, message: 'Network Mismatch: Please connect to Office Wi-Fi.' });
+      }
+    }
+
+    // B. GPS Check
+    if (office.latitude && office.longitude) {
+      if (!latitude || !longitude) {
+        return res.status(400).json({ success: false, message: 'Location is required. Please enable GPS.' });
+      }
+
+      const dist = calculateDistance(
+        parseFloat(latitude), parseFloat(longitude),
+        parseFloat(office.latitude), parseFloat(office.longitude)
+      );
+
+      const MAX_QR_DISTANCE = 200; // 200 meters allowed for QR
+      if (dist > MAX_QR_DISTANCE) {
+        return res.status(400).json({
+          success: false,
+          message: `You are too far from the office (${Math.round(dist)}m). max: ${MAX_QR_DISTANCE}m`
+        });
+      }
+    }
+
+    // 4. Record Attendance
+    const today = moment().startOf('day').toDate();
+    const [existing] = await db.select().from(attendance)
+      .where(and(eq(attendance.employeeId, userId), gte(attendance.date, today)))
+      .limit(1);
+
+    if (existing) return res.status(400).json({ success: false, message: "Already checked in today" });
+
+    const [record] = await db.insert(attendance).values({
+      employeeId: userId,
+      date: today,
+      checkInTime: new Date(),
+      checkInLocation: `QR: ${office.name}`,
+      checkInIpAddress: ipAddress,
+      checkInDeviceInfo: `${userAgent} (QR)`, // Mark as QR
+      status: 'present'
+    }).returning();
+
+    res.json({
+      success: true,
+      message: `Checked in at ${office.name} via QR`,
+      data: {
+        attendance: record,
+        office: office.name
+      }
+    });
+
+  } catch (error) {
+    console.error('QR Checkin Error:', error);
+    res.status(500).json({ success: false, message: 'Server Error' });
+  }
+});
 
 
 // @route   GET /api/attendance

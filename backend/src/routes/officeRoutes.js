@@ -5,6 +5,7 @@ import { getDB } from '../config/db.js';
 import { offices, geofences } from '../db/schema.js';
 import { authenticate, authorize } from '../middleware/authMiddleware.js';
 import { getClientIp } from '../utils/ipUtils.js';
+import { generateQRToken } from '../services/qrService.js';
 
 const router = express.Router();
 
@@ -402,6 +403,29 @@ router.delete('/:id', authenticate, authorize('admin', 'hr'), async (req, res) =
       success: false,
       message: 'Server error deleting office'
     });
+  }
+});
+
+/**
+ * @route   GET /api/offices/:id/qr-token
+ * @desc    Get a signed QR token for an office (Dynamic QR)
+ * @access  Private (Admin/HR only)
+ */
+router.get('/:id/qr-token', authenticate, authorize('admin', 'hr'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = generateQRToken(parseInt(id));
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        expiresIn: 30 // seconds
+      }
+    });
+  } catch (error) {
+    console.error('Get QR Token error:', error);
+    res.status(500).json({ success: false, message: 'Server error generating QR token' });
   }
 });
 
