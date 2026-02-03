@@ -6,7 +6,9 @@ import { getDB } from '../config/db.js';
 import { attendance, users, leaves, offices } from '../db/schema.js';
 import { authenticate, authorize } from '../middleware/authMiddleware.js';
 import { checkIn, checkOut, exportMonthlyExcel } from '../controllers/attendanceController.js';
+
 import { getClientIp, isIpInRanges } from '../utils/ipUtils.js';
+import { verifyDevice } from '../services/deviceService.js';
 
 
 const router = express.Router();
@@ -43,6 +45,19 @@ router.post('/checkin-secure', authenticate, async (req, res) => {
     const userId = req.user.id;
     const ipAddress = getClientIp(req);
     const userAgent = req.get('User-Agent') || '';
+    const { deviceId } = req.body;
+
+    // 0. Device Security Check
+    if (!deviceId) {
+      return res.status(400).json({ success: false, message: 'Device ID is required for secure check-in.' });
+    }
+
+    try {
+      // This will bind the device if it's the first time, or verify it matches
+      await verifyDevice(userId, deviceId);
+    } catch (deviceError) {
+      return res.status(403).json({ success: false, message: deviceError.message });
+    }
 
     // 1. Get Active Offices
     const activeOffices = await db.select().from(offices).where(eq(offices.isActive, true));

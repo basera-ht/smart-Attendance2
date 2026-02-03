@@ -17,6 +17,16 @@ export default function SecureCheckInPage() {
     if (!isAuthenticated) router.push('/login')
   }, [isAuthenticated, router])
 
+  // Helper to get or create a persistent Device ID
+  const getDeviceId = () => {
+    let deviceId = localStorage.getItem('attendance_device_id')
+    if (!deviceId) {
+      deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+      localStorage.setItem('attendance_device_id', deviceId)
+    }
+    return deviceId
+  }
+
   const handleCheckIn = async () => {
     try {
       setStatus('locating')
@@ -46,7 +56,11 @@ export default function SecureCheckInPage() {
             latitude,
             longitude,
             accuracy,
-            timestamp
+            latitude,
+            longitude,
+            accuracy,
+            timestamp,
+            deviceId: getDeviceId() // Send device ID
           })
 
           if (response.data?.success) {
