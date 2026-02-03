@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/router'
 import { useAuth } from '../../hooks/useAuth'
+import { getDeviceId } from '../../utils/deviceUtils'
 
 export default function Login() {
   const [formData, setFormData] = useState({
@@ -11,7 +12,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [hasMounted, setHasMounted] = useState(false)
-  
+
   const { login, isAuthenticated, loading: authLoading } = useAuth()
   const router = useRouter()
 
@@ -40,7 +41,8 @@ export default function Login() {
     setError('')
 
     try {
-      const result = await login(formData)
+      const deviceId = getDeviceId()
+      const result = await login({ ...formData, deviceId })
       if (result.success) {
         router.replace('/dashboard')
       } else {
@@ -87,9 +89,9 @@ export default function Login() {
       <div className="max-w-md w-full space-y-8">
         <div>
           <div className="mx-auto h-12 w-12 flex items-center justify-center">
-            <img 
-              src="/logo.png" 
-              alt="Logo" 
+            <img
+              src="/logo.png"
+              alt="Logo"
               className="h-12 w-12 object-contain"
             />
           </div>

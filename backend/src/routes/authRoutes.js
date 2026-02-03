@@ -7,6 +7,7 @@ import { eq, and, gte } from 'drizzle-orm';
 import { getDB, connectDB, closeDB } from '../config/db.js';
 import { users, refreshTokens } from '../db/schema.js';
 import { authenticate } from '../middleware/authMiddleware.js';
+import { verifyDevice } from '../services/deviceService.js';
 
 const router = express.Router();
 
@@ -188,7 +189,7 @@ router.post('/login', [
       });
     }
 
-    const { email, password } = req.body;
+    const { email, password, deviceId } = req.body;
     const db = getDB();
 
     // Check if user exists
@@ -237,7 +238,19 @@ router.post('/login', [
     await db
       .update(users)
       .set({ lastLogin: new Date() })
+      .set({ lastLogin: new Date() })
       .where(eq(users.id, user.id));
+
+    // Attempt to bind/verify device if provided
+    if (deviceId) {
+      try {
+        await verifyDevice(user.id, deviceId);
+        console.log(`[Login] Device verified/linked for user ${user.id}: ${deviceId}`);
+      } catch (deviceError) {
+        // Log error but allow login (dashboard access shouldn't be blocked by device mismatch, only check-in)
+        console.warn(`[Login] Device verification warning for user ${user.id}: ${deviceError.message}`);
+      }
+    }
 
     // Generate tokens
     const accessToken = generateAccessToken(user.id);
