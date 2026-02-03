@@ -1,6 +1,6 @@
 {
     "name": "smart-attendance-backend",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Backend for Corporate Smart Attendance System",
     "type": "module",
     "main": "server.js",
