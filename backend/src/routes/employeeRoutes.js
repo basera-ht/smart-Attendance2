@@ -83,8 +83,17 @@ router.get('/', authenticate, authorize('admin', 'hr'), async (req, res) => {
       .limit(parseInt(limit))
       .offset(offset);
 
+    // DEBUG LOGGING
+    if (employees.length > 0) {
+      console.log('DEBUG: First employee record:', JSON.stringify({
+        id: employees[0].id,
+        registeredDeviceId: employees[0].registeredDeviceId
+      }, null, 2));
+    }
+
     res.json({
       success: true,
+      apiVersion: "1.0.2",
       data: {
         docs: employees,
         totalDocs: total,
@@ -136,6 +145,8 @@ router.get('/:id', authenticate, async (req, res) => {
         profilePicture: users.profilePicture,
         createdAt: users.createdAt,
         updatedAt: users.updatedAt,
+        registeredDeviceId: users.registeredDeviceId,
+        deviceLastSeen: users.deviceLastSeen,
       })
       .from(users)
       .where(eq(users.id, id))
