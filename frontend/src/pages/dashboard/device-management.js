@@ -127,6 +127,7 @@ export default function DeviceManagement() {
                                 <tr>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Employee</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device Status</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Parameters</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Seen</th>
                                     <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                 </tr>
@@ -154,19 +155,22 @@ export default function DeviceManagement() {
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             {employee.registeredDeviceId ? (
-                                                <div className="flex flex-col">
-                                                    <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800 w-fit">
-                                                        Linked
-                                                    </span>
-                                                    <span className="text-xs text-gray-400 mt-1 font-mono">
-                                                        ID: {employee.registeredDeviceId.substring(0, 16)}...
-                                                    </span>
-                                                </div>
+                                                <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                                    Linked
+                                                </span>
                                             ) : (
                                                 <span className="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
                                                     Unlinked
                                                 </span>
                                             )}
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap">
+                                            <div className="flex flex-col">
+                                                <span className="text-xs text-gray-500 font-medium">Device ID</span>
+                                                <span className="text-xs text-gray-900 font-mono">
+                                                    {employee.registeredDeviceId ? employee.registeredDeviceId : 'No Device'}
+                                                </span>
+                                            </div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                             {employee.deviceLastSeen ? (
@@ -182,10 +186,10 @@ export default function DeviceManagement() {
                                             {employee.registeredDeviceId && (
                                                 <button
                                                     onClick={() => handleResetClick(employee)}
-                                                    className="text-orange-600 hover:text-orange-900 bg-orange-50 hover:bg-orange-100 px-3 py-1 rounded-md transition-colors flex items-center ml-auto"
+                                                    className="text-red-600 hover:text-red-900 bg-red-50 hover:bg-red-100 px-3 py-1 rounded-md transition-colors flex items-center ml-auto"
                                                 >
                                                     <RefreshCw className="w-3 h-3 mr-1" />
-                                                    Reset Device
+                                                    Unlink Device
                                                 </button>
                                             )}
                                         </td>
