@@ -19,6 +19,7 @@ export default function SecureCheckInPage() {
 
   // Helper to get or create a persistent Device ID
   const getDeviceId = () => {
+    if (typeof window === 'undefined') return null; // Handle SSR
     let deviceId = localStorage.getItem('attendance_device_id')
     if (!deviceId) {
       deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
@@ -56,9 +57,7 @@ export default function SecureCheckInPage() {
             latitude,
             longitude,
             accuracy,
-            latitude,
-            longitude,
-            accuracy,
+
             timestamp,
             deviceId: getDeviceId() // Send device ID
           })
