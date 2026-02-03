@@ -15,6 +15,8 @@ export const verifyDevice = async (userId, deviceId) => {
         throw new Error('Device ID is required');
     }
 
+    console.log(`[DeviceService] verifyDevice called for userId: ${userId} (type: ${typeof userId}), deviceId: ${deviceId}`);
+
     const db = getDB();
     const [user] = await db
         .select({
@@ -23,6 +25,8 @@ export const verifyDevice = async (userId, deviceId) => {
         .from(users)
         .where(eq(users.id, userId))
         .limit(1);
+
+    console.log(`[DeviceService] User found:`, user ? 'YES' : 'NO', user);
 
     if (!user) {
         throw new Error('User not found');
@@ -37,12 +41,15 @@ export const verifyDevice = async (userId, deviceId) => {
                 deviceLastSeen: new Date()
             })
             .where(eq(users.id, userId));
+
+        console.log(`[DeviceService] LINKED NEW DEVICE: ${deviceId} to user ${userId}`);
         return true;
     }
 
     // 2. If device is registered, check for match
     if (user.registeredDeviceId !== deviceId) {
         // SECURITY ALERT: Device mismatch
+        console.error(`[DeviceService] MISMATCH: Expected ${user.registeredDeviceId}, got ${deviceId}`);
         throw new Error('Unauthorized Device: You can only check in from your registered device.');
     }
 

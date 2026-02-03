@@ -48,6 +48,7 @@ router.post('/checkin-secure', authenticate, async (req, res) => {
     const { deviceId } = req.body;
 
     // 0. Device Security Check
+    console.log(`[SecureCheckIn] Received deviceId: ${deviceId} for user ${userId}`);
     if (!deviceId) {
       return res.status(400).json({ success: false, message: 'Device ID is required for secure check-in.' });
     }
