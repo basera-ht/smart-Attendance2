@@ -2,6 +2,8 @@
 import { useEffect, useState } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { authAPI } from '../../services/api'
+import { getDeviceId } from '../../utils/deviceUtils'
+import { Smartphone, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react'
 import DashboardLayout from '../../components/DashboardLayout'
 
 export default function Profile() {
@@ -19,13 +21,19 @@ export default function Profile() {
   })
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [currentDeviceId, setCurrentDeviceId] = useState('')
+  const [resettingDevice, setResettingDevice] = useState(false)
+
+  useEffect(() => {
+    setCurrentDeviceId(getDeviceId())
+  }, [])
 
   useEffect(() => {
     const fetchProfile = async () => {
       try {
         setLoading(true)
         const response = await authAPI.getProfile()
-        
+
         if (response.data && response.data.success) {
           const userData = response.data.data.user
           setProfile(userData)
@@ -75,13 +83,13 @@ export default function Profile() {
     try {
       setError('')
       setSuccess('')
-      
+
       const response = await authAPI.updateProfile({
         name: formData.name,
         phone: formData.phone,
         address: formData.address
       })
-      
+
       if (response.data && response.data.success) {
         setSuccess('Profile updated successfully!')
         setProfile(response.data.data.user)
@@ -104,6 +112,33 @@ export default function Profile() {
       logout()
     }
   }
+
+  const handleDeviceReset = async () => {
+    if (!window.confirm('Are you sure you want to reset your device binding? You will need to re-login to bind this current device.')) {
+      return
+    }
+
+    try {
+      setResettingDevice(true)
+      const response = await authAPI.resetDevice()
+      if (response.data && response.data.success) {
+        setSuccess('Device binding reset! Please Logout and Login again to bind this new device.')
+        const fetchProfile = async () => {
+          try {
+            const res = await authAPI.getProfile()
+            if (res.data?.success) setProfile(res.data.data.user)
+          } catch (e) { console.error(e) }
+        }
+        fetchProfile()
+      }
+    } catch (err) {
+      console.error('Device reset error', err)
+      setError('Failed to reset device binding')
+    } finally {
+      setResettingDevice(false)
+    }
+  }
+
 
   if (loading) {
     return (
@@ -290,6 +325,62 @@ export default function Profile() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      </div>
+
+      {/* Device Security Section */}
+      <div className="bg-white shadow rounded-lg mt-6">
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-medium text-gray-900 flex items-center gap-2">
+            <Smartphone className="w-5 h-5" />
+            Device Security
+          </h3>
+        </div>
+        <div className="p-6">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div>
+              <p className="text-sm text-gray-500 mb-1">Device Binding Status</p>
+              {profile.registeredDeviceId ? (
+                profile.registeredDeviceId === currentDeviceId ? (
+                  <div className="flex items-center text-green-600 font-medium">
+                    <ShieldCheck className="w-5 h-5 mr-2" />
+                    <span>This device is verified and bound to your account.</span>
+                  </div>
+                ) : (
+                  <div className="flex items-start text-red-600 font-medium">
+                    <AlertTriangle className="w-5 h-5 mr-2 mt-0.5" />
+                    <div>
+                      <p>Device Mismatch Detected!</p>
+                      <p className="text-sm font-normal text-gray-600 mt-1">
+                        Your account is bound to a different device (ID ending in ...{profile.registeredDeviceId.slice(-6)}).
+                        <br />
+                        You cannot use Check-in features until you switch to that device or reset binding.
+                      </p>
+                    </div>
+                  </div>
+                )
+              ) : (
+                <div className="flex items-center text-yellow-600 font-medium">
+                  <AlertTriangle className="w-5 h-5 mr-2" />
+                  <span>No device is strictly bound yet. It will bind automatically on next check-in.</span>
+                </div>
+              )}
+            </div>
+
+            {profile.registeredDeviceId && profile.registeredDeviceId !== currentDeviceId && (
+              <button
+                onClick={handleDeviceReset}
+                disabled={resettingDevice}
+                className="flex items-center justify-center px-4 py-2 border border-red-300 shadow-sm text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+              >
+                <RefreshCw className={`w-4 h-4 mr-2 ${resettingDevice ? 'animate-spin' : ''}`} />
+                {resettingDevice ? 'Resetting...' : 'Reset Device Binding'}
+              </button>
+            )}
+          </div>
+          <div className="mt-4 text-xs text-gray-400">
+            <p>Current Device ID: {currentDeviceId}</p>
           </div>
         </div>
       </div>
