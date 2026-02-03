@@ -93,7 +93,7 @@ export default function OfficesPage() {
     }
   }
 
-  const handleAutoDetectIp = async () => {
+  const handleAutoDetectIp = async (mode = 'single') => {
     try {
       setIpDetecting(true)
       setError('')
@@ -103,10 +103,32 @@ export default function OfficesPage() {
         return
       }
 
-      const cidr = response.data?.data?.cidr
-      if (!cidr) {
+      const ip = response.data?.data?.ip
+      if (!ip) {
         setError('Failed to detect IP')
         return
+      }
+
+      let newCidr = ''
+      if (mode === 'range') {
+        // Create /24 range for IPv4
+        if (ip.includes('.')) {
+          const parts = ip.split('.')
+          parts[3] = '0'
+          newCidr = `${parts.join('.')}/24`
+        } else if (ip.includes(':')) {
+          // Simple /64 assumption for IPv6
+          // This is a naive split, real IPv6 handling is complex but this covers common cases
+          const parts = ip.split(':');
+          // Keep first 4 blocks for /64
+          if (parts.length >= 4) {
+            newCidr = `${parts.slice(0, 4).join(':')}::/64`
+          } else {
+            newCidr = `${ip}/128` // Fallback
+          }
+        }
+      } else {
+        newCidr = ip.includes(':') ? `${ip}/128` : `${ip}/32`
       }
 
       const existing = formData.allowedIPRanges
@@ -114,8 +136,8 @@ export default function OfficesPage() {
         .map((s) => s.trim())
         .filter(Boolean)
 
-      if (!existing.includes(cidr)) {
-        existing.push(cidr)
+      if (!existing.includes(newCidr)) {
+        existing.push(newCidr)
       }
 
       setFormData((prev) => ({
@@ -241,14 +263,23 @@ export default function OfficesPage() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 font-mono text-sm"
                   placeholder={`192.168.1.0/24\n10.0.0.0/16`}
                 />
-                <div className="mt-2">
+                <div className="mt-2 flex space-x-2">
                   <button
                     type="button"
-                    onClick={handleAutoDetectIp}
+                    onClick={() => handleAutoDetectIp('single')}
                     disabled={ipDetecting}
                     className="bg-gray-100 hover:bg-gray-200 disabled:bg-gray-200 text-gray-800 px-3 py-2 rounded-lg text-sm font-medium"
                   >
-                    {ipDetecting ? 'Detecting IP...' : 'Use Current IP'}
+                    {ipDetecting ? 'Detecting...' : 'Add Current IP'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAutoDetectIp('range')}
+                    disabled={ipDetecting}
+                    className="bg-blue-50 hover:bg-blue-100 disabled:bg-gray-200 text-blue-700 border border-blue-200 px-3 py-2 rounded-lg text-sm font-medium"
+                    title="Allows any device on this WiFi network (Use if IP changes frequently)"
+                  >
+                    {ipDetecting ? 'Detecting...' : 'Create Static IP Range'}
                   </button>
                 </div>
               </div>
