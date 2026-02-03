@@ -7,14 +7,14 @@ export const getEmployees = async (req, res) => {
     const db = getDB();
     const { page = 1, limit = 10, department, status, search } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    
+
     // Build filter conditions
     let conditions = [];
-    
+
     if (department) {
       conditions.push(eq(users.department, department));
     }
-    
+
     if (status) {
       // Map status to isActive
       if (status === 'active') {
@@ -23,7 +23,7 @@ export const getEmployees = async (req, res) => {
         conditions.push(eq(users.isActive, false));
       }
     }
-    
+
     if (search) {
       conditions.push(
         or(
@@ -58,6 +58,8 @@ export const getEmployees = async (req, res) => {
         isActive: users.isActive,
         lastLogin: users.lastLogin,
         profilePicture: users.profilePicture,
+        registeredDeviceId: users.registeredDeviceId,
+        deviceLastSeen: users.deviceLastSeen,
         createdAt: users.createdAt,
         updatedAt: users.updatedAt,
       })
@@ -103,13 +105,15 @@ export const getEmployee = async (req, res) => {
         isActive: users.isActive,
         lastLogin: users.lastLogin,
         profilePicture: users.profilePicture,
+        registeredDeviceId: users.registeredDeviceId,
+        deviceLastSeen: users.deviceLastSeen,
         createdAt: users.createdAt,
         updatedAt: users.updatedAt,
       })
       .from(users)
       .where(eq(users.id, req.params.id))
       .limit(1);
-    
+
     if (!employee) {
       return res.status(404).json({
         success: false,
@@ -135,11 +139,11 @@ export const updateEmployee = async (req, res) => {
   try {
     const db = getDB();
     const { name, email, role, department, position, phone, status } = req.body;
-    
+
     const updateData = {
       updatedAt: new Date(),
     };
-    
+
     if (name) updateData.name = name.trim();
     if (email) updateData.email = email.toLowerCase().trim();
     if (role) updateData.role = role;
@@ -150,7 +154,7 @@ export const updateEmployee = async (req, res) => {
       // Map status to isActive
       updateData.isActive = status === 'active';
     }
-    
+
     const [updatedEmployee] = await db
       .update(users)
       .set(updateData)
@@ -186,14 +190,14 @@ export const updateEmployee = async (req, res) => {
     });
   } catch (error) {
     console.error('Update employee error:', error);
-    
+
     if (error.code === '23505') {
       return res.status(400).json({
         success: false,
         message: 'Email or employee ID already exists'
       });
     }
-    
+
     res.status(500).json({
       success: false,
       message: 'Error updating employee',
@@ -239,14 +243,14 @@ export const updateEmployeeStatus = async (req, res) => {
   try {
     const db = getDB();
     const { status } = req.body;
-    
+
     if (!['active', 'inactive'].includes(status)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid status. Must be "active" or "inactive"'
       });
     }
-    
+
     const [updatedEmployee] = await db
       .update(users)
       .set({
