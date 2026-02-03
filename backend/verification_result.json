@@ -1,0 +1,22 @@
+[
+  {
+    "id": 8,
+    "name": "Yukiwa Keys",
+    "email": "parasbasera9@gmail.com",
+    "password": "$2b$10$HPM2N6Jpzc6BdWzILwVs8.Kh61TtuGzL106XG60HCvoPiYz6geklu",
+    "role": "admin",
+    "fingerprintHash": null,
+    "employeeId": "EMP918307",
+    "department": "Software Development",
+    "position": "Developer",
+    "phone": null,
+    "address": null,
+    "isActive": true,
+    "lastLogin": "2026-02-03T07:53:51.687Z",
+    "registeredDeviceId": null,
+    "deviceLastSeen": null,
+    "profilePicture": null,
+    "createdAt": "2026-02-02T07:55:18.394Z",
+    "updatedAt": "2026-02-02T07:55:18.394Z"
+  }
+]
