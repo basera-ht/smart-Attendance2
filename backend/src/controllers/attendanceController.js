@@ -54,9 +54,10 @@ export const checkIn = async (req, res) => {
     }
 
     if (!isIpInRanges(clientIp, allowedRanges)) {
+      console.warn(`[CheckIn] IP Mismatch. Client: ${clientIp}, Allowed: ${JSON.stringify(allowedRanges)}`);
       return res.status(403).json({
         success: false,
-        message: 'Not on corporate network'
+        message: `Not on corporate network (Detected IP: ${clientIp})`
       });
     }
 

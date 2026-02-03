@@ -592,34 +592,5 @@ router.get('/tokens', authenticate, async (req, res) => {
   }
 });
 
-// @route   POST /api/auth/reset-device
-// @desc    Self-service device reset for the current user
-// @access  Private
-router.post('/reset-device', authenticate, async (req, res) => {
-  try {
-    const db = getDB();
-    const userId = req.user.id;
-
-    await db
-      .update(users)
-      .set({
-        registeredDeviceId: null,
-        deviceLastSeen: null,
-        updatedAt: new Date()
-      })
-      .where(eq(users.id, userId));
-
-    res.json({
-      success: true,
-      message: 'Device binding reset successfully. Your current device will be linked on next login/check-in.'
-    });
-  } catch (error) {
-    console.error('Self-reset device error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error during device reset'
-    });
-  }
-});
 
 export default router;

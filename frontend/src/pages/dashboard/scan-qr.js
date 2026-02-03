@@ -117,7 +117,10 @@ export default function ScanQR() {
                                 onError={handleError}
                                 onScan={handleScan}
                                 style={{ width: '100%', height: '100%' }}
-                            // constraints={{ video: { facingMode: 'environment' } }} // Use back camera
+                                constraints={{
+                                    audio: false,
+                                    video: { facingMode: 'environment' }
+                                }}
                             />
                             <div className="absolute inset-0 border-2 border-blue-500/50 pointer-events-none flex items-center justify-center">
                                 <div className="w-48 h-48 border-2 border-blue-400 rounded-lg"></div>

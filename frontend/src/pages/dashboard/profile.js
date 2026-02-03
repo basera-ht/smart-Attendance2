@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { authAPI } from '../../services/api'
 import { getDeviceId } from '../../utils/deviceUtils'
-import { Smartphone, AlertTriangle, ShieldCheck, RefreshCw } from 'lucide-react'
+import { Smartphone, AlertTriangle, ShieldCheck } from 'lucide-react'
 import DashboardLayout from '../../components/DashboardLayout'
 
 export default function Profile() {
@@ -22,7 +22,6 @@ export default function Profile() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [currentDeviceId, setCurrentDeviceId] = useState('')
-  const [resettingDevice, setResettingDevice] = useState(false)
 
   useEffect(() => {
     setCurrentDeviceId(getDeviceId())
@@ -110,32 +109,6 @@ export default function Profile() {
   const handleLogout = () => {
     if (window.confirm('Are you sure you want to logout?')) {
       logout()
-    }
-  }
-
-  const handleDeviceReset = async () => {
-    if (!window.confirm('Are you sure you want to reset your device binding? You will need to re-login to bind this current device.')) {
-      return
-    }
-
-    try {
-      setResettingDevice(true)
-      const response = await authAPI.resetDevice()
-      if (response.data && response.data.success) {
-        setSuccess('Device binding reset! Please Logout and Login again to bind this new device.')
-        const fetchProfile = async () => {
-          try {
-            const res = await authAPI.getProfile()
-            if (res.data?.success) setProfile(res.data.data.user)
-          } catch (e) { console.error(e) }
-        }
-        fetchProfile()
-      }
-    } catch (err) {
-      console.error('Device reset error', err)
-      setError('Failed to reset device binding')
-    } finally {
-      setResettingDevice(false)
     }
   }
 
@@ -369,14 +342,9 @@ export default function Profile() {
             </div>
 
             {profile.registeredDeviceId && profile.registeredDeviceId !== currentDeviceId && (
-              <button
-                onClick={handleDeviceReset}
-                disabled={resettingDevice}
-                className="flex items-center justify-center px-4 py-2 border border-red-300 shadow-sm text-sm font-medium rounded-md text-red-700 bg-white hover:bg-red-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
-              >
-                <RefreshCw className={`w-4 h-4 mr-2 ${resettingDevice ? 'animate-spin' : ''}`} />
-                {resettingDevice ? 'Resetting...' : 'Reset Device Binding'}
-              </button>
+              <div className="mt-2 text-sm text-red-600 bg-red-50 p-2 rounded">
+                Please contact your Administrator to reset your device binding.
+              </div>
             )}
           </div>
           <div className="mt-4 text-xs text-gray-400">
