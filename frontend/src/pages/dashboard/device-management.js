@@ -98,7 +98,6 @@ export default function DeviceManagement() {
                             <Smartphone className="mr-2 h-6 w-6 text-blue-600" />
                             Device Management
                         </h1>
-                        <p className="text-gray-600 mt-1">Manage employee device bindings and security</p>
                     </div>
                 </div>
 
