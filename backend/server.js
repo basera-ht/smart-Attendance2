@@ -60,6 +60,21 @@ const ensureDatabaseConnection = async (req, res, next) => {
   }
 };
 
+// Debug endpoint to check IP address as seen by the server
+app.get('/api/debug/ip', (req, res) => {
+  res.json({
+    ip: req.ip,
+    ips: req.ips,
+    headers: {
+      'x-forwarded-for': req.headers['x-forwarded-for'],
+      'x-real-ip': req.headers['x-real-ip'],
+      'cf-connecting-ip': req.headers['cf-connecting-ip'], // Cloudflare
+      'true-client-ip': req.headers['true-client-ip'],
+    },
+    trustProxy: app.get('trust proxy'),
+  });
+});
+
 // Health check endpoint - Defined BEFORE DB middleware to ensure it works even if DB fails
 app.get('/api/health', async (req, res) => {
   let dbStatus = 'disconnected';

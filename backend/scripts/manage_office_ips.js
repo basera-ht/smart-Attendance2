@@ -12,6 +12,9 @@ const __dirname = path.dirname(__filename);
 // Explicitly load .env from backend root
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
+const command = process.argv[2];
+const ipToAdd = process.argv[3];
+
 async function manageOfficeIps() {
     console.log('--- Office IP Management Script ---');
 
@@ -27,41 +30,72 @@ async function manageOfficeIps() {
             return;
         }
 
-        console.log(`Found ${allOffices.length} offices.`);
-
-        // 2. Update the first office (or a specific one if needed)
-        // For this task, we'll update the first active office we find, or all of them.
-        // Let's target the one named 'Head Office' or similar, or just the first one.
-
         const targetOffice = allOffices[0];
-        console.log(`Targeting Office: ${targetOffice.name} (ID: ${targetOffice.id})`);
-        console.log(`Current IPs: ${JSON.stringify(targetOffice.allowedIPRanges)}`);
+        console.log(`Targeting First Office: ${targetOffice.name} (ID: ${targetOffice.id})`);
 
-        // IPs to add: Localhost (IPv4/IPv6) and the specific Public IP
-        const newIps = ['127.0.0.1/32', '::1/128', '106.215.138.170/32'];
+        let currentIps = targetOffice.allowedIPRanges || [];
+        console.log(`Current Allowed IPs: ${JSON.stringify(currentIps)}`);
 
-        // Update
-        await db
-            .update(offices)
-            .set({
-                allowedIPRanges: newIps,
-                updatedAt: new Date()
-            })
-            .where(eq(offices.id, targetOffice.id));
+        if (command === 'add' && ipToAdd) {
+            // Validate basic IP format (simplistic check)
+            if (!ipToAdd.includes('.')) {
+                console.log('❌ Invalid IP format. Please provide a valid IPv4 address (e.g., 1.2.3.4)');
+                return;
+            }
 
-        console.log(`✅ Updated IP ranges for ${targetOffice.name} to:`, newIps);
+            // Append CIDR /32 if missing
+            const cidrIp = ipToAdd.includes('/') ? ipToAdd : `${ipToAdd}/32`;
 
-        // Verify
-        const [updatedOffice] = await db
-            .select()
-            .from(offices)
-            .where(eq(offices.id, targetOffice.id))
-            .limit(1);
+            if (!currentIps.includes(cidrIp)) {
+                const newIps = [...currentIps, cidrIp];
 
-        console.log('--- Verification ---');
-        console.log(`ID: ${updatedOffice.id}`);
-        console.log(`Name: ${updatedOffice.name}`);
-        console.log(`Allowed IPs: ${JSON.stringify(updatedOffice.allowedIPRanges)}`);
+                await db
+                    .update(offices)
+                    .set({
+                        allowedIPRanges: newIps,
+                        updatedAt: new Date()
+                    })
+                    .where(eq(offices.id, targetOffice.id));
+
+                console.log(`✅ Added ${cidrIp}. New list:`, newIps);
+            } else {
+                console.log(`ℹ️ IP ${cidrIp} is already allowed.`);
+            }
+        } else if (command === 'list') {
+            // Just listing (already done above)
+        } else {
+            console.log('\nUsage:');
+            console.log('  node scripts/manage_office_ips.js list         -> View allowed IPs');
+            console.log('  node scripts/manage_office_ips.js add <IP>     -> Add a new IP (e.g. 1.2.3.4)');
+            console.log('\nRunning in default mode (Restoring default IPs + Localhost)...');
+
+            // Default restoration behavior (Legacy support)
+            const defaultIps = ['127.0.0.1/32', '::1/128', '106.215.138.170/32'];
+            // Merge defaults with current to avoid losing custom ones if running default mode
+            // But originally this script OVERWROTE everything. Let's make it safer: only add defaults if missing.
+            let updated = false;
+            let mergedIps = [...currentIps];
+
+            for (const ip of defaultIps) {
+                if (!mergedIps.includes(ip)) {
+                    mergedIps.push(ip);
+                    updated = true;
+                }
+            }
+
+            if (updated) {
+                await db
+                    .update(offices)
+                    .set({
+                        allowedIPRanges: mergedIps,
+                        updatedAt: new Date()
+                    })
+                    .where(eq(offices.id, targetOffice.id));
+                console.log(`✅ restored/added default IPs:`, mergedIps);
+            } else {
+                console.log('✅ Default IPs are already present.');
+            }
+        }
 
     } catch (err) {
         console.error('❌ Error updating office IPs:', err);
