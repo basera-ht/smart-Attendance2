@@ -61,6 +61,8 @@ export const checkIn = async (req, res) => {
       });
     }
 
+    console.log(`[CheckIn] IP Valid. Client: ${clientIp}`);
+
     // Check if already checked in today
     const todayStart = moment().startOf('day').toDate();
     const todayEnd = moment().endOf('day').toDate();
