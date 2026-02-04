@@ -97,6 +97,24 @@ router.post('/register', [
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // Role assignment logic:
+    // 1. If trying to be admin, check if an admin already exists.
+    // 2. If an admin exists, force role to 'employee' (First user policy).
+    let assignedRole = role || 'employee';
+
+    if (assignedRole === 'admin') {
+      const [adminExists] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.role, 'admin'))
+        .limit(1);
+
+      if (adminExists) {
+        // Silently downgrade to employee if admin already exists
+        assignedRole = 'employee';
+      }
+    }
+
     // Generate employee ID
     const timestamp = Date.now().toString().slice(-6);
     const employeeId = `EMP${timestamp}`;
@@ -108,7 +126,7 @@ router.post('/register', [
         name: name.trim(),
         email: email.toLowerCase().trim(),
         password: hashedPassword,
-        role,
+        role: assignedRole,
         employeeId,
         department: department?.trim() || null,
         position: position?.trim() || null,
@@ -592,5 +610,30 @@ router.get('/tokens', authenticate, async (req, res) => {
   }
 });
 
+
+// @route   GET /api/auth/admin-check
+// @desc    Check if an admin account already exists
+// @access  Public
+router.get('/admin-check', async (req, res) => {
+  try {
+    const db = getDB();
+    const [admin] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, 'admin'))
+      .limit(1);
+
+    res.json({
+      success: true,
+      exists: !!admin
+    });
+  } catch (error) {
+    console.error('Check admin exists error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+});
 
 export default router;

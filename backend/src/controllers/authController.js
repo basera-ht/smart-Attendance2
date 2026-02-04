@@ -35,13 +35,28 @@ export const register = async (req, res) => {
     }
 
     // Validate role assignment (prevent privilege escalation)
-    const requestingUser = req.user;
-    if (role === 'admin' && requestingUser?.role !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admins can create admin users'
-      });
+    // Role assignment logic:
+    // 1. If trying to be admin, check if an admin already exists.
+    // 2. If an admin exists, force role to 'employee' (First user policy).
+    // 3. This allows the first registered user to be admin, but blocks subsequent ones.
+    if (role === 'admin') {
+      const [adminExists] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.role, 'admin'))
+        .limit(1);
+
+      if (adminExists) {
+        // Silently downgrade to employee if admin already exists
+        req.body.role = 'employee';
+      }
     }
+
+    // Note: We modified req.body.role, so we need to use that updated value or a local variable
+    const assignedRole = req.body.role || 'employee';
+
+    // (Optional) Retain stricter check if needed, but the above handles the public signup case
+    // existing check removed as it blocked the first admin creation if not logged in
 
     // Hash password
     const salt = await bcrypt.genSalt(10);
@@ -58,7 +73,7 @@ export const register = async (req, res) => {
         name: name.trim(),
         email: email.toLowerCase().trim(),
         password: hashedPassword,
-        role: role || 'employee',
+        role: assignedRole,
         employeeId,
         department: department?.trim() || null,
         position: position?.trim() || null,
@@ -109,3 +124,25 @@ export const register = async (req, res) => {
 export const validateRegistration = [
   // Validation is handled by express-validator in routes
 ];
+
+export const checkAdminExists = async (req, res) => {
+  try {
+    const db = getDB();
+    const [admin] = await db
+      .select({ id: users.id })
+      .from(users)
+      .where(eq(users.role, 'admin'))
+      .limit(1);
+
+    res.json({
+      success: true,
+      exists: !!admin
+    });
+  } catch (error) {
+    console.error('Check admin exists error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};

@@ -28,6 +28,22 @@ export default function Register() {
     }
   }, [isAuthenticated, authLoading, router])
 
+  // Check if admin exists to hide the option
+  const [adminExists, setAdminExists] = useState(false)
+  useEffect(() => {
+    const checkAdmin = async () => {
+      try {
+        const { data } = await authAPI.checkAdminExists()
+        if (data.exists) {
+          setAdminExists(true)
+        }
+      } catch (err) {
+        console.error('Failed to check admin status:', err)
+      }
+    }
+    checkAdmin()
+  }, [])
+
   const handleChange = (e) => {
     setFormData({
       ...formData,
@@ -198,7 +214,7 @@ export default function Register() {
               >
                 <option value="employee">Employee</option>
                 <option value="hr">HR Manager</option>
-                <option value="admin">Administrator</option>
+                {!adminExists && <option value="admin">Administrator</option>}
               </select>
             </div>
 

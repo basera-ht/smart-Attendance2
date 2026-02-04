@@ -141,6 +141,7 @@ export const authAPI = {
   refreshToken: (refreshToken) => api.post('/auth/refresh', { refreshToken }),
   logout: (data) => api.post('/auth/logout', data),
   getTokens: () => api.get('/auth/tokens'),
+  checkAdminExists: () => api.get('/auth/admin-check'),
 }
 
 // Attendance API
