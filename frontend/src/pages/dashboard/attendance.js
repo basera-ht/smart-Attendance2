@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { attendanceAPI, employeesAPI, leavesAPI } from '../../services/api'
 import DashboardLayout from '../../components/DashboardLayout'
 import MonthlyCalendarView from '../../components/MonthlyCalendarView'
+import AttendanceSheetView from '../../components/AttendanceSheetView'
 import InlineAlert from '../../components/InlineAlert'
 import { getDeviceId } from '../../utils/deviceUtils'
 
@@ -16,7 +17,9 @@ export default function Attendance() {
   const [selectedEmployee, setSelectedEmployee] = useState('')
   const [actionLoading, setActionLoading] = useState({})
   const [employeeSearchTerm, setEmployeeSearchTerm] = useState('')
+  const [selectedMonth, setSelectedMonth] = useState(new Date())
   const [activeTab, setActiveTab] = useState('today') // 'today' or 'calendar'
+  const [calendarViewMode, setCalendarViewMode] = useState('sheet') // 'card' or 'sheet'
   const [todayRecord, setTodayRecord] = useState(null)
   const [quickActionLoading, setQuickActionLoading] = useState(false)
   const [bulkCheckInLoading, setBulkCheckInLoading] = useState(false)
@@ -662,6 +665,7 @@ export default function Attendance() {
               <h3 className="text-lg font-medium text-gray-900">Today's Attendance</h3>
             </div>
             <div className="md:hidden space-y-3 p-4">
+              {/* ... (rest of today view logic remains same) ... */}
               {attendance.length > 0 ? (
                 attendance.map((record, index) => {
                   const employeeId = getEmployeeIdFromRecord(record)
@@ -802,28 +806,33 @@ export default function Attendance() {
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             {record.date || new Date().toISOString().split('T')[0]}
                           </td>
-                          {isAdmin && employeeId && (
-                            <td className="px-6 py-4 whitespace-nowrap text-sm">
-                              <div className="flex space-x-2">
-                                {!checkInTime && (
-                                  <button
-                                    onClick={() => handleAdminCheckIn(employeeId)}
-                                    disabled={actionLoading[`checkin-${employeeId}`]}
-                                    className="bg-green-500 hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-xs font-medium transition-colors"
-                                  >
-                                    {actionLoading[`checkin-${employeeId}`] ? '...' : 'Check In'}
-                                  </button>
-                                )}
-                                {checkInTime && !checkOutTime && (
-                                  <button
-                                    onClick={() => handleAdminCheckOut(employeeId)}
-                                    disabled={actionLoading[`checkout-${employeeId}`]}
-                                    className="bg-red-500 hover:bg-red-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-xs font-medium transition-colors"
-                                  >
-                                    {actionLoading[`checkout-${employeeId}`] ? '...' : 'Check Out'}
-                                  </button>
-                                )}
-                              </div>
+                          {isAdmin && (
+                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                              {employeeId && (
+                                <div className="flex gap-2">
+                                  {!checkInTime && (
+                                    <button
+                                      onClick={() => handleAdminCheckIn(employeeId)}
+                                      disabled={actionLoading[`checkin-${employeeId}`]}
+                                      className="text-green-600 hover:text-green-900 disabled:text-gray-400 font-medium"
+                                    >
+                                      {actionLoading[`checkin-${employeeId}`] ? '...' : 'In'}
+                                    </button>
+                                  )}
+                                  {checkInTime && !checkOutTime && (
+                                    <button
+                                      onClick={() => handleAdminCheckOut(employeeId)}
+                                      disabled={actionLoading[`checkout-${employeeId}`]}
+                                      className="text-red-600 hover:text-red-900 disabled:text-gray-400 font-medium"
+                                    >
+                                      {actionLoading[`checkout-${employeeId}`] ? '...' : 'Out'}
+                                    </button>
+                                  )}
+                                  {checkInTime && checkOutTime && (
+                                    <span className="text-gray-400 italic">Done</span>
+                                  )}
+                                </div>
+                              )}
                             </td>
                           )}
                         </tr>
@@ -831,8 +840,8 @@ export default function Attendance() {
                     })
                   ) : (
                     <tr>
-                      <td colSpan={isAdmin ? 6 : 5} className="px-6 py-4 text-center text-sm text-gray-500">
-                        No attendance records found for today
+                      <td colSpan={isAdmin ? 6 : 5} className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 text-center">
+                        No attendance records found
                       </td>
                     </tr>
                   )}
@@ -841,7 +850,41 @@ export default function Attendance() {
             </div>
           </div>
         ) : (
-          <MonthlyCalendarView isAdmin={isAdmin} />
+          <div>
+            <div className="flex justify-end mb-4 space-x-2">
+              <button
+                onClick={() => setCalendarViewMode('card')}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${calendarViewMode === 'card'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-white border border-gray-300 text-gray-600'
+                  }`}
+              >
+                Detailed View
+              </button>
+              <button
+                onClick={() => setCalendarViewMode('sheet')}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${calendarViewMode === 'sheet'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-white border border-gray-300 text-gray-600'
+                  }`}
+              >
+                Sheet View
+              </button>
+            </div>
+            {calendarViewMode === 'sheet' ? (
+              <AttendanceSheetView
+                isAdmin={isAdmin}
+                selectedMonth={selectedMonth}
+                setSelectedMonth={setSelectedMonth}
+              />
+            ) : (
+              <MonthlyCalendarView
+                isAdmin={isAdmin}
+                selectedMonth={selectedMonth}
+                setSelectedMonth={setSelectedMonth}
+              />
+            )}
+          </div>
         )}
 
         {/* Floating Quick Action Button for Employees */}
